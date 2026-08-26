@@ -156,7 +156,6 @@
       <div class="qc-row">Profundidad: <b>${depth}</b></div>
       <div class="qc-row">Coordenadas: <b>${coords}</b> (${precision})</div>
       <div class="qc-row">Fuente: <b>${src}</b></div>
-      ${q.url ? `<a class="qc-link" href="${escapeHtml(q.url)}" target="_blank" rel="noopener noreferrer">Ver detalle ↗</a>` : ''}
     `;
   }
 
@@ -170,9 +169,18 @@
 
   // ---------- Globe ----------
 
+  // Touch devices have no hover: the tap already opens the bottom card, so
+  // the hover tooltip would duplicate it.
+  const isTouch = window.matchMedia('(pointer: coarse)').matches;
+
+  // Low-power tuning for phones/tablets: fewer cylinder segments, no bump
+  // map and a capped pixel ratio are imperceptible at handset sizes but cut
+  // GPU work drastically on older devices.
+  const lowPower = isTouch || window.matchMedia('(max-width: 820px)').matches;
+
   const globe = Globe()(el.globe)
     .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-dark.jpg')
-    .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+    .bumpImageUrl(lowPower ? null : 'https://unpkg.com/three-globe/example/img/earth-topology.png')
     .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
     .atmosphereColor('#3a6ea5')
     .atmosphereAltitude(0.18)
@@ -182,7 +190,9 @@
     .pointAltitude((q) => (q.damaging ? 0.035 : 0.01 + 0.003 * Math.max(0, q.magnitude)))
     .pointRadius(pointRadius)
     .pointsMerge(false)
-    .pointLabel((q) => `<div class="globe-tooltip">${quakeCardHtml(q)}</div>`)
+    .pointResolution(lowPower ? 6 : 12)
+    .pointsTransitionDuration(0)
+    .pointLabel(isTouch ? () => null : (q) => `<div class="globe-tooltip">${quakeCardHtml(q)}</div>`)
     .onPointClick((q) => showQuakeCard(q))
     .htmlLat('lat')
     .htmlLng('lon')
@@ -231,6 +241,16 @@
   }
   window.addEventListener('resize', sizeGlobe);
   sizeGlobe();
+
+  // Cap the device pixel ratio: retina phones otherwise render ~4x the pixels
+  // the eye can resolve at handset size — the single biggest cost on old GPUs.
+  globe.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, lowPower ? 1.5 : 2));
+
+  // Don't burn GPU/battery while the tab is in the background.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) globe.pauseAnimation();
+    else globe.resumeAnimation();
+  });
 
   // ---------- Filtering & rendering ----------
 
