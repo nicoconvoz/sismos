@@ -1,0 +1,407 @@
+/* Sismos — frontend logic: data loading, filters and the 3D globe. */
+/* global Globe */
+
+(() => {
+  'use strict';
+
+  // ---------- Constants ----------
+
+  const REFRESH_MS = 60 * 1000; // near-real-time polling (USGS feed updates ~every minute)
+  const TICK_MS = 30 * 1000; // "updated X min ago" ticker
+  const RECENT_MS = 60 * 60 * 1000; // quakes newer than this pulse
+
+  const COLORS = {
+    green: [46, 204, 113],
+    yellow: [241, 196, 15],
+    orange: [230, 126, 34],
+    red: [231, 76, 60],
+    magenta: [224, 64, 251]
+  };
+
+  // ---------- State ----------
+
+  const state = {
+    quakes: [],
+    damaging: [],
+    damagingLoaded: false,
+    updatedAt: null,
+    filters: {
+      minMag: 0,
+      windowHours: 24,
+      continent: '',
+      text: '',
+      showDamaging: false
+    }
+  };
+
+  // ---------- DOM ----------
+
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    globe: $('globe'),
+    loading: $('loading'),
+    errorBox: $('errorBox'),
+    retryBtn: $('retryBtn'),
+    refreshBtn: $('refreshBtn'),
+    updated: $('updated'),
+    counter: $('counter'),
+    magSlider: $('magSlider'),
+    magValue: $('magValue'),
+    windowSelect: $('windowSelect'),
+    continentSelect: $('continentSelect'),
+    placeInput: $('placeInput'),
+    damagingToggle: $('damagingToggle'),
+    panel: $('panel'),
+    panelToggle: $('panelToggle'),
+    quakeCard: $('quakeCard'),
+    toast: $('toast')
+  };
+
+  // ---------- Formatting helpers (Spanish UI copy) ----------
+
+  const utcFmt = new Intl.DateTimeFormat('es-ES', {
+    timeZone: 'UTC',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+
+  function relativeTime(iso) {
+    const diff = Date.now() - Date.parse(iso);
+    const min = Math.round(diff / 60000);
+    if (min < 1) return 'hace instantes';
+    if (min < 60) return `hace ${min} min`;
+    const h = Math.floor(min / 60);
+    const rem = min % 60;
+    if (h < 24) return rem ? `hace ${h} h ${rem} min` : `hace ${h} h`;
+    const d = Math.floor(h / 24);
+    return `hace ${d} día${d > 1 ? 's' : ''}`;
+  }
+
+  function formatUtc(iso) {
+    return `${utcFmt.format(new Date(iso))} UTC`;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+  }
+
+  // ---------- Colors / sizing ----------
+
+  function magRgb(mag, damaging) {
+    if (damaging) return COLORS.magenta;
+    if (mag < 3) return COLORS.green;
+    if (mag < 4.5) return COLORS.yellow;
+    if (mag < 6) return COLORS.orange;
+    return COLORS.red;
+  }
+
+  function recencyAlpha(iso) {
+    const age = Date.now() - Date.parse(iso);
+    if (age <= RECENT_MS) return 1;
+    const t = Math.min(1, age / (24 * 3600 * 1000));
+    return 1 - 0.35 * t; // fades down to ~0.65 at 24 h — older quakes must stay clearly visible
+  }
+
+  function pointColor(q) {
+    const [r, g, b] = magRgb(q.magnitude, q.damaging);
+    const a = q.damaging ? 0.95 : recencyAlpha(q.time);
+    return `rgba(${r},${g},${b},${a.toFixed(2)})`;
+  }
+
+  function pointRadius(q) {
+    // Generous minimum size so micro-quakes (M < 2) remain visible on the globe.
+    return Math.max(0.32, 0.22 + 0.11 * Math.max(0, q.magnitude));
+  }
+
+  // Expanding/contracting wave marking last-hour quakes as new.
+  // Zero-size wrapper keeps the ring centered on the quake regardless of how
+  // globe.gl anchors HTML elements; the ring animates `scale` so it never
+  // fights the positioning transform.
+  function pulseElement(q) {
+    const wrap = document.createElement('div');
+    wrap.className = 'pulse-wrap';
+    const ring = document.createElement('div');
+    ring.className = 'pulse-ring';
+    const [r, g, b] = magRgb(q.magnitude, false);
+    const size = Math.round(20 + 5 * Math.max(0, q.magnitude));
+    ring.style.width = `${size}px`;
+    ring.style.height = `${size}px`;
+    ring.style.borderColor = `rgb(${r},${g},${b})`;
+    ring.style.boxShadow = `0 0 14px rgba(${r},${g},${b},0.7)`;
+    wrap.appendChild(ring);
+    return wrap;
+  }
+
+  // ---------- Quake card HTML ----------
+
+  function quakeCardHtml(q, { closable = false } = {}) {
+    const [r, g, b] = magRgb(q.magnitude, q.damaging);
+    const coords = `${q.lat.toFixed(2)}°, ${q.lon.toFixed(2)}°`;
+    const depth = q.depthKm != null ? `${q.depthKm} km` : 'no disponible';
+    const src = { usgs: 'USGS', emsc: 'EMSC', volcanodiscovery: 'VolcanoDiscovery' }[q.source] || q.source;
+    const precision = q.exactCoords ? 'exactas' : 'aproximadas';
+    return `
+      ${closable ? '<button class="qc-close" aria-label="Cerrar">×</button>' : ''}
+      <div class="qc-head">
+        <span class="qc-mag" style="color:rgb(${r},${g},${b})">M ${q.magnitude.toFixed(1)}</span>
+        ${q.damaging ? '<span class="qc-badge">Sismo dañino</span>' : ''}
+      </div>
+      <div class="qc-place">${escapeHtml(q.place || 'Ubicación desconocida')}</div>
+      <div class="qc-row"><b>${relativeTime(q.time)}</b> · ${formatUtc(q.time)}</div>
+      <div class="qc-row">Profundidad: <b>${depth}</b></div>
+      <div class="qc-row">Coordenadas: <b>${coords}</b> (${precision})</div>
+      <div class="qc-row">Fuente: <b>${src}</b></div>
+      ${q.url ? `<a class="qc-link" href="${escapeHtml(q.url)}" target="_blank" rel="noopener noreferrer">Ver detalle ↗</a>` : ''}
+    `;
+  }
+
+  function showQuakeCard(q) {
+    el.quakeCard.innerHTML = quakeCardHtml(q, { closable: true });
+    el.quakeCard.classList.remove('hidden');
+    el.quakeCard.querySelector('.qc-close').addEventListener('click', () => {
+      el.quakeCard.classList.add('hidden');
+    });
+  }
+
+  // ---------- Globe ----------
+
+  const globe = Globe()(el.globe)
+    .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-dark.jpg')
+    .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+    .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
+    .atmosphereColor('#3a6ea5')
+    .atmosphereAltitude(0.18)
+    .pointLat('lat')
+    .pointLng('lon')
+    .pointColor(pointColor)
+    .pointAltitude((q) => (q.damaging ? 0.035 : 0.01 + 0.003 * Math.max(0, q.magnitude)))
+    .pointRadius(pointRadius)
+    .pointsMerge(false)
+    .pointLabel((q) => `<div class="globe-tooltip">${quakeCardHtml(q)}</div>`)
+    .onPointClick((q) => showQuakeCard(q))
+    .htmlLat('lat')
+    .htmlLng('lon')
+    .htmlAltitude(0.02)
+    .htmlElement(pulseElement)
+    .ringLat('lat')
+    .ringLng('lon')
+    .ringColor((ring) => (t) => {
+      const [r, g, b] = ring.rgb;
+      return `rgba(${r},${g},${b},${(1 - t).toFixed(2)})`;
+    })
+    .ringMaxRadius((ring) => 1.5 + ring.mag * 0.6)
+    .ringPropagationSpeed(1.6)
+    .ringRepeatPeriod(1100);
+
+  // Country borders: transparent caps with a subtle stroke, so quakes stay readable.
+  // Non-fatal if the atlas CDN fails — the globe still works without outlines.
+  fetch('https://unpkg.com/world-atlas@2.0.2/countries-110m.json')
+    .then((res) => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    })
+    .then((topo) => {
+      const countries = window.topojson.feature(topo, topo.objects.countries).features;
+      globe
+        .polygonsData(countries)
+        .polygonCapColor(() => 'rgba(0,0,0,0)')
+        .polygonSideColor(() => 'rgba(0,0,0,0)')
+        .polygonStrokeColor(() => 'rgba(170,190,215,0.45)')
+        .polygonAltitude(0.004)
+        .polygonsTransitionDuration(0)
+        .polygonLabel(({ properties: p }) => `<div class="country-label">${escapeHtml(p.name)}</div>`);
+    })
+    .catch((err) => {
+      console.warn('Country borders unavailable:', err);
+    });
+
+  globe.controls().autoRotate = true;
+  globe.controls().autoRotateSpeed = 0.6;
+  el.globe.addEventListener('pointerdown', () => {
+    globe.controls().autoRotate = false;
+  }, { once: true });
+
+  function sizeGlobe() {
+    globe.width(window.innerWidth).height(window.innerHeight);
+  }
+  window.addEventListener('resize', sizeGlobe);
+  sizeGlobe();
+
+  // ---------- Filtering & rendering ----------
+
+  function matchesFilters(q, { applyWindow = true } = {}) {
+    const f = state.filters;
+    if (q.magnitude < f.minMag) return false;
+    if (applyWindow) {
+      const age = Date.now() - Date.parse(q.time);
+      if (age > f.windowHours * 3600 * 1000) return false;
+    }
+    if (f.continent && q.continent !== f.continent) return false;
+    if (f.text) {
+      const hay = `${q.place || ''} ${q.country || ''}`.toLowerCase();
+      if (!hay.includes(f.text)) return false;
+    }
+    return true;
+  }
+
+  function render() {
+    const visible = state.quakes.filter((q) => matchesFilters(q));
+
+    // Damaging quakes: year-wide layer, so the recency filter does not apply.
+    let damagingVisible = [];
+    if (state.filters.showDamaging) {
+      damagingVisible = state.damaging.filter((q) => matchesFilters(q, { applyWindow: false }));
+    }
+    const damagingIds = new Set(damagingVisible.map((q) => q.id));
+    const base = visible.filter((q) => !damagingIds.has(q.id));
+
+    globe.pointsData([...base, ...damagingVisible]);
+
+    // Expand/contract wave: ONLY last-hour quakes get it.
+    const lastHour = base.filter((q) => Date.now() - Date.parse(q.time) <= RECENT_MS);
+    globe.htmlElementsData(lastHour);
+
+    // Damaging quakes keep their propagating magenta ring for tracking.
+    globe.ringsData(
+      damagingVisible.map((q) => ({ lat: q.lat, lon: q.lon, mag: q.magnitude, rgb: COLORS.magenta }))
+    );
+
+    const total = state.quakes.length + (state.filters.showDamaging ? state.damaging.length : 0);
+    const shown = base.length + damagingVisible.length;
+    el.counter.innerHTML = `<strong>${shown}</strong> sismos visibles / ${total} totales`;
+  }
+
+  // ---------- Data loading ----------
+
+  async function fetchJson(url) {
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  // ---------- New-quake detection (near-real-time) ----------
+
+  const knownIds = new Set();
+  let toastTimer;
+
+  function notifyNewQuakes(fresh) {
+    const strongest = fresh.reduce((a, b) => (b.magnitude > a.magnitude ? b : a));
+    el.toast.innerHTML = fresh.length === 1
+      ? `⚡ Nuevo sismo: <b>M ${strongest.magnitude.toFixed(1)}</b> · ${escapeHtml(strongest.place || '')}`
+      : `⚡ <b>${fresh.length}</b> sismos nuevos · mayor: M ${strongest.magnitude.toFixed(1)}`;
+    el.toast.classList.remove('hidden');
+    el.toast.onclick = () => {
+      globe.pointOfView({ lat: strongest.lat, lng: strongest.lon, altitude: 1.6 }, 1200);
+      showQuakeCard(strongest);
+      el.toast.classList.add('hidden');
+    };
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.toast.classList.add('hidden'), 15000);
+  }
+
+  async function loadQuakes({ initial = false } = {}) {
+    el.refreshBtn.disabled = true;
+    if (initial) el.loading.classList.remove('hidden');
+    try {
+      const data = await fetchJson('/api/quakes');
+      state.quakes = data.quakes || [];
+      state.updatedAt = Date.now();
+      el.errorBox.classList.add('hidden');
+
+      const fresh = state.quakes.filter((q) => !knownIds.has(q.id));
+      const firstLoad = knownIds.size === 0;
+      state.quakes.forEach((q) => knownIds.add(q.id));
+      if (!firstLoad && fresh.length > 0) notifyNewQuakes(fresh);
+
+      render();
+      renderUpdated();
+    } catch (err) {
+      console.error('Failed to load quakes:', err);
+      if (state.quakes.length === 0) {
+        el.errorBox.classList.remove('hidden');
+      }
+    } finally {
+      el.loading.classList.add('hidden');
+      el.refreshBtn.disabled = false;
+    }
+  }
+
+  async function loadDamaging() {
+    try {
+      const data = await fetchJson('/api/damaging');
+      state.damaging = (data.quakes || []).map((q) => ({ ...q, damaging: true }));
+      state.damagingLoaded = true;
+      render();
+    } catch (err) {
+      console.error('Failed to load damaging quakes:', err);
+    }
+  }
+
+  function renderUpdated() {
+    if (!state.updatedAt) return;
+    const min = Math.round((Date.now() - state.updatedAt) / 60000);
+    el.updated.textContent = min < 1 ? 'Actualizado hace instantes' : `Actualizado hace ${min} min`;
+  }
+
+  // ---------- Events ----------
+
+  el.magSlider.addEventListener('input', () => {
+    state.filters.minMag = Number(el.magSlider.value);
+    el.magValue.textContent = state.filters.minMag.toFixed(1);
+    render();
+  });
+
+  el.windowSelect.addEventListener('change', () => {
+    state.filters.windowHours = Number(el.windowSelect.value);
+    render();
+  });
+
+  el.continentSelect.addEventListener('change', () => {
+    state.filters.continent = el.continentSelect.value;
+    render();
+  });
+
+  let textDebounce;
+  el.placeInput.addEventListener('input', () => {
+    clearTimeout(textDebounce);
+    textDebounce = setTimeout(() => {
+      state.filters.text = el.placeInput.value.trim().toLowerCase();
+      render();
+    }, 200);
+  });
+
+  el.damagingToggle.addEventListener('change', () => {
+    state.filters.showDamaging = el.damagingToggle.checked;
+    if (state.filters.showDamaging && !state.damagingLoaded) {
+      loadDamaging();
+    }
+    render();
+  });
+
+  el.refreshBtn.addEventListener('click', () => {
+    loadQuakes();
+    if (state.filters.showDamaging) loadDamaging();
+  });
+  el.retryBtn.addEventListener('click', () => loadQuakes({ initial: true }));
+
+  el.panelToggle.addEventListener('click', () => {
+    el.panel.classList.toggle('open');
+  });
+
+  // ---------- Boot ----------
+
+  loadQuakes({ initial: true });
+  setInterval(() => {
+    loadQuakes();
+    if (state.filters.showDamaging) loadDamaging();
+  }, REFRESH_MS);
+  setInterval(() => {
+    renderUpdated();
+    render(); // keeps recency fading/rings honest over time
+  }, TICK_MS);
+})();
