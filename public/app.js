@@ -123,6 +123,7 @@
     return Math.max(0.32, 0.22 + 0.11 * Math.max(0, q.magnitude)) * zoomScale;
   }
 
+
   // Expanding/contracting wave marking last-hour quakes as new.
   // Zero-size wrapper keeps the ring centered on the quake regardless of how
   // globe.gl anchors HTML elements; the ring animates `scale` so it never
@@ -189,19 +190,23 @@
     .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
     .atmosphereColor('#3a6ea5')
     .atmosphereAltitude(0.18)
-    .pointLat('lat')
-    .pointLng('lon')
-    .pointColor(pointColor)
-    .pointAltitude((q) => (q.damaging ? 0.035 : 0.01 + 0.003 * Math.max(0, q.magnitude)))
-    .pointRadius(pointRadius)
-    .pointsMerge(false)
-    .pointResolution(lowPower ? 6 : 12)
-    .pointsTransitionDuration(0)
-    .pointLabel(isTouch ? () => null : (q) => `<div class="globe-tooltip">${quakeCardHtml(q)}</div>`)
-    .onPointClick((q) => showQuakeCard(q))
+    // Quakes render through the labels layer with empty text: its dot is a
+    // truly flat circle painted on the surface — never a cylinder, visible
+    // from any angle and zoom level.
+    .labelLat('lat')
+    .labelLng('lon')
+    .labelText(() => '')
+    .labelColor(pointColor)
+    .labelDotRadius(pointRadius)
+    .labelAltitude(0.008)
+    .labelsTransitionDuration(0)
+    .labelLabel(isTouch ? () => null : (q) => `<div class="globe-tooltip">${quakeCardHtml(q)}</div>`)
+    .onLabelClick((q) => showQuakeCard(q))
     .htmlLat('lat')
     .htmlLng('lon')
-    .htmlAltitude(0.02)
+    // Must match labelAltitude exactly — any height difference shifts the
+    // pulse away from its quake circle through parallax.
+    .htmlAltitude(0.008)
     .htmlElement(pulseElement)
     .ringLat('lat')
     .ringLng('lon')
@@ -255,7 +260,7 @@
     if (Math.abs(next - zoomScale) / zoomScale < 0.08) return;
     zoomScale = next;
     clearTimeout(zoomTimer);
-    zoomTimer = setTimeout(() => globe.pointRadius((q) => pointRadius(q)), lowPower ? 150 : 60);
+    zoomTimer = setTimeout(() => globe.labelDotRadius((q) => pointRadius(q)), lowPower ? 150 : 60);
   });
 
   // Cap the device pixel ratio: retina phones otherwise render ~4x the pixels
@@ -296,7 +301,7 @@
     const damagingIds = new Set(damagingVisible.map((q) => q.id));
     const base = visible.filter((q) => !damagingIds.has(q.id));
 
-    globe.pointsData([...base, ...damagingVisible]);
+    globe.labelsData([...base, ...damagingVisible]);
 
     // Expand/contract wave: ONLY last-hour quakes get it.
     const lastHour = base.filter((q) => Date.now() - Date.parse(q.time) <= RECENT_MS);
