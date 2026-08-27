@@ -127,21 +127,20 @@
   // devices, where the merged mesh has no per-point events.
   let renderedMarkers = [];
 
-  function nearestQuake(lat, lng) {
-    // Finger-sized tolerance in degrees of arc, scaled with zoom.
-    const tol = Math.max(0.8, 7 * zoomScale);
-    let best = null;
-    let bestD = Infinity;
-    for (const q of renderedMarkers) {
-      const dLat = q.lat - lat;
-      const dLon = ((q.lon - lng + 540) % 360) - 180;
-      const d = Math.hypot(dLat, dLon * Math.cos((lat * Math.PI) / 180));
-      if (d < bestD) {
-        bestD = d;
-        best = q;
-      }
-    }
-    return bestD <= tol ? best : null;
+  function quakesNear(lat, lng) {
+    // Tap tolerance shrinks proportionally with zoom, so zooming in genuinely
+    // increases selection precision (degrees of arc).
+    const tol = Math.max(0.15, 3.5 * zoomScale);
+    const cosLat = Math.cos((lat * Math.PI) / 180);
+    return renderedMarkers
+      .map((q) => {
+        const dLat = q.lat - lat;
+        const dLon = (((q.lon - lng + 540) % 360) - 180) * cosLat;
+        return { q, d: Math.hypot(dLat, dLon) };
+      })
+      .filter((x) => x.d <= tol)
+      .sort((a, b) => a.d - b.d)
+      .map((x) => x.q);
   }
 
 
@@ -194,6 +193,35 @@
     });
   }
 
+  // When a tap lands on a cluster, let the user pick instead of guessing.
+  function showQuakePicker(quakes) {
+    const shown = quakes.slice(0, 6);
+    const rows = shown
+      .map((q, i) => {
+        const [r, g, b] = magRgb(q.magnitude, q.damaging);
+        return `<button class="qc-pick" data-i="${i}">
+          <span class="qc-pick-mag" style="color:rgb(${r},${g},${b})">M ${q.magnitude.toFixed(1)}</span>
+          <span class="qc-pick-place">${escapeHtml(q.place || 'Ubicación desconocida')}</span>
+          <span class="qc-pick-time">${relativeTime(q.time)}</span>
+        </button>`;
+      })
+      .join('');
+    const extra = quakes.length > shown.length
+      ? `<div class="qc-pick-more">Hay ${quakes.length - shown.length} más en esta zona — acercate para distinguirlos.</div>`
+      : '';
+    el.quakeCard.innerHTML = `
+      <button class="qc-close" aria-label="Cerrar">×</button>
+      <div class="qc-pick-title">Sismos cerca del punto tocado</div>
+      ${rows}${extra}`;
+    el.quakeCard.classList.remove('hidden');
+    el.quakeCard.querySelector('.qc-close').addEventListener('click', () => {
+      el.quakeCard.classList.add('hidden');
+    });
+    el.quakeCard.querySelectorAll('.qc-pick').forEach((btn) => {
+      btn.addEventListener('click', () => showQuakeCard(shown[Number(btn.dataset.i)]));
+    });
+  }
+
   // ---------- Globe ----------
 
   // Touch devices have no hover: the tap already opens the bottom card, so
@@ -243,8 +271,9 @@
       .pointResolution(6)
       .pointsTransitionDuration(0)
       .onGlobeClick(({ lat, lng }) => {
-        const q = nearestQuake(lat, lng);
-        if (q) showQuakeCard(q);
+        const near = quakesNear(lat, lng);
+        if (near.length === 1) showQuakeCard(near[0]);
+        else if (near.length > 1) showQuakePicker(near);
       });
   } else {
     globe

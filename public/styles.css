@@ -311,6 +311,38 @@ html, body {
 }
 .qc-close:hover { color: var(--text); }
 
+/* Cluster picker (tap landed on several nearby quakes) */
+.qc-pick-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-right: 18px;
+}
+.qc-pick {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+  text-align: left;
+}
+.qc-pick:hover { border-color: var(--accent); }
+.qc-pick-mag { font-weight: 800; flex: none; }
+.qc-pick-place {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qc-pick-time { color: var(--text-dim); flex: none; font-size: 0.72rem; }
+.qc-pick-more { color: var(--text-dim); font-size: 0.72rem; margin-top: 2px; }
+
 /* globe.gl injects the hover tooltip as .scene-tooltip */
 .scene-tooltip { pointer-events: none; }
 
