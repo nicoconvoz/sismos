@@ -123,6 +123,27 @@
     return Math.max(0.32, 0.22 + 0.11 * Math.max(0, q.magnitude)) * zoomScale;
   }
 
+  // Markers currently on the globe — needed to resolve taps manually on touch
+  // devices, where the merged mesh has no per-point events.
+  let renderedMarkers = [];
+
+  function nearestQuake(lat, lng) {
+    // Finger-sized tolerance in degrees of arc, scaled with zoom.
+    const tol = Math.max(0.8, 7 * zoomScale);
+    let best = null;
+    let bestD = Infinity;
+    for (const q of renderedMarkers) {
+      const dLat = q.lat - lat;
+      const dLon = ((q.lon - lng + 540) % 360) - 180;
+      const d = Math.hypot(dLat, dLon * Math.cos((lat * Math.PI) / 180));
+      if (d < bestD) {
+        bestD = d;
+        best = q;
+      }
+    }
+    return bestD <= tol ? best : null;
+  }
+
 
   // Expanding/contracting wave marking last-hour quakes as new.
   // Zero-size wrapper keeps the ring centered on the quake regardless of how
@@ -187,21 +208,9 @@
   const globe = Globe()(el.globe)
     .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-dark.jpg')
     .bumpImageUrl(lowPower ? null : 'https://unpkg.com/three-globe/example/img/earth-topology.png')
-    .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
+    .backgroundImageUrl(lowPower ? null : 'https://unpkg.com/three-globe/example/img/night-sky.png')
     .atmosphereColor('#3a6ea5')
     .atmosphereAltitude(0.18)
-    // Quakes render through the labels layer with empty text: its dot is a
-    // truly flat circle painted on the surface — never a cylinder, visible
-    // from any angle and zoom level.
-    .labelLat('lat')
-    .labelLng('lon')
-    .labelText(() => '')
-    .labelColor(pointColor)
-    .labelDotRadius(pointRadius)
-    .labelAltitude(0.008)
-    .labelsTransitionDuration(0)
-    .labelLabel(isTouch ? () => null : (q) => `<div class="globe-tooltip">${quakeCardHtml(q)}</div>`)
-    .onLabelClick((q) => showQuakeCard(q))
     .htmlLat('lat')
     .htmlLng('lon')
     // Must match labelAltitude exactly — any height difference shifts the
@@ -217,6 +226,38 @@
     .ringMaxRadius((ring) => 1.5 + ring.mag * 0.6)
     .ringPropagationSpeed(1.6)
     .ringRepeatPeriod(1100);
+
+  // Quake markers: flat circles on the surface in both modes.
+  // - Desktop: labels layer (empty-text flat dot) with per-quake hover/click.
+  // - Touch: 500+ individual meshes stutter on old phones, so all quakes merge
+  //   into a single mesh (one draw call) and taps resolve to the nearest quake
+  //   via onGlobeClick, since the merged mesh has no per-point events.
+  if (isTouch) {
+    globe
+      .pointLat('lat')
+      .pointLng('lon')
+      .pointColor(pointColor)
+      .pointAltitude(() => 0.0015 * zoomScale)
+      .pointRadius(pointRadius)
+      .pointsMerge(true)
+      .pointResolution(6)
+      .pointsTransitionDuration(0)
+      .onGlobeClick(({ lat, lng }) => {
+        const q = nearestQuake(lat, lng);
+        if (q) showQuakeCard(q);
+      });
+  } else {
+    globe
+      .labelLat('lat')
+      .labelLng('lon')
+      .labelText(() => '')
+      .labelColor(pointColor)
+      .labelDotRadius(pointRadius)
+      .labelAltitude(0.008)
+      .labelsTransitionDuration(0)
+      .labelLabel((q) => `<div class="globe-tooltip">${quakeCardHtml(q)}</div>`)
+      .onLabelClick((q) => showQuakeCard(q));
+  }
 
   // Country borders: transparent caps with a subtle stroke, so quakes stay readable.
   // Non-fatal if the atlas CDN fails — the globe still works without outlines.
@@ -260,12 +301,19 @@
     if (Math.abs(next - zoomScale) / zoomScale < 0.08) return;
     zoomScale = next;
     clearTimeout(zoomTimer);
-    zoomTimer = setTimeout(() => globe.labelDotRadius((q) => pointRadius(q)), lowPower ? 150 : 60);
+    zoomTimer = setTimeout(() => {
+      if (isTouch) {
+        globe.pointRadius((q) => pointRadius(q));
+        globe.pointAltitude(() => 0.0015 * zoomScale);
+      } else {
+        globe.labelDotRadius((q) => pointRadius(q));
+      }
+    }, lowPower ? 150 : 60);
   });
 
   // Cap the device pixel ratio: retina phones otherwise render ~4x the pixels
   // the eye can resolve at handset size — the single biggest cost on old GPUs.
-  globe.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, lowPower ? 1.5 : 2));
+  globe.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, lowPower ? 1.25 : 2));
 
   // Don't burn GPU/battery while the tab is in the background.
   document.addEventListener('visibilitychange', () => {
@@ -301,7 +349,12 @@
     const damagingIds = new Set(damagingVisible.map((q) => q.id));
     const base = visible.filter((q) => !damagingIds.has(q.id));
 
-    globe.labelsData([...base, ...damagingVisible]);
+    renderedMarkers = [...base, ...damagingVisible];
+    if (isTouch) {
+      globe.pointsData(renderedMarkers);
+    } else {
+      globe.labelsData(renderedMarkers);
+    }
 
     // Expand/contract wave: ONLY last-hour quakes get it.
     const lastHour = base.filter((q) => Date.now() - Date.parse(q.time) <= RECENT_MS);
