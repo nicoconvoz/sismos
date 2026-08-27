@@ -113,9 +113,14 @@
     return `rgba(${r},${g},${b},${a.toFixed(2)})`;
   }
 
+  // Shrinks point radii as the camera zooms in, so clustered quakes separate
+  // and each point sits precisely on its coordinates. 1 at the default
+  // altitude (2.5), down to ~1/8 when fully zoomed in.
+  let zoomScale = 1;
+
   function pointRadius(q) {
     // Generous minimum size so micro-quakes (M < 2) remain visible on the globe.
-    return Math.max(0.32, 0.22 + 0.11 * Math.max(0, q.magnitude));
+    return Math.max(0.32, 0.22 + 0.11 * Math.max(0, q.magnitude)) * zoomScale;
   }
 
   // Expanding/contracting wave marking last-hour quakes as new.
@@ -241,6 +246,17 @@
   }
   window.addEventListener('resize', sizeGlobe);
   sizeGlobe();
+
+  // Re-size points on zoom. onZoom also fires while rotating, so only rebuild
+  // the (debounced) layer when the altitude-derived scale actually changes.
+  let zoomTimer;
+  globe.onZoom(({ altitude }) => {
+    const next = Math.min(1, Math.max(0.12, altitude / 2.5));
+    if (Math.abs(next - zoomScale) / zoomScale < 0.08) return;
+    zoomScale = next;
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(() => globe.pointRadius((q) => pointRadius(q)), lowPower ? 150 : 60);
+  });
 
   // Cap the device pixel ratio: retina phones otherwise render ~4x the pixels
   // the eye can resolve at handset size — the single biggest cost on old GPUs.
