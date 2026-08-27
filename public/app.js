@@ -144,32 +144,19 @@
   }
 
 
-  // Expanding/contracting wave marking last-hour quakes as new.
-  // Zero-size wrapper keeps the ring centered on the quake regardless of how
-  // globe.gl anchors HTML elements; the ring animates `scale` so it never
-  // fights the positioning transform.
-  function pulseElement(q) {
-    const wrap = document.createElement('div');
-    wrap.className = 'pulse-wrap';
-    const ring = document.createElement('div');
-    ring.className = 'pulse-ring';
-    const [r, g, b] = magRgb(q.magnitude, false);
-    const size = Math.round(20 + 5 * Math.max(0, q.magnitude));
-    ring.style.width = `${size}px`;
-    ring.style.height = `${size}px`;
-    ring.style.borderColor = `rgb(${r},${g},${b})`;
-    ring.style.boxShadow = `0 0 14px rgba(${r},${g},${b},0.7)`;
-    wrap.appendChild(ring);
-    return wrap;
-  }
-
   // ---------- Quake card HTML ----------
 
   function quakeCardHtml(q, { closable = false } = {}) {
     const [r, g, b] = magRgb(q.magnitude, q.damaging);
     const coords = `${q.lat.toFixed(2)}°, ${q.lon.toFixed(2)}°`;
     const depth = q.depthKm != null ? `${q.depthKm} km` : 'no disponible';
-    const src = { usgs: 'USGS', emsc: 'EMSC', volcanodiscovery: 'VolcanoDiscovery' }[q.source] || q.source;
+    const src = {
+      usgs: 'USGS',
+      emsc: 'EMSC',
+      volcanodiscovery: 'VolcanoDiscovery',
+      inpres: 'INPRES',
+      csn: 'CSN (Chile)'
+    }[q.source] || q.source;
     const precision = q.exactCoords ? 'exactas' : 'aproximadas';
     return `
       ${closable ? '<button class="qc-close" aria-label="Cerrar">×</button>' : ''}
@@ -178,6 +165,7 @@
         ${q.damaging ? '<span class="qc-badge">Sismo dañino</span>' : ''}
       </div>
       <div class="qc-place">${escapeHtml(q.place || 'Ubicación desconocida')}</div>
+      ${q.near ? `<div class="qc-row">Cerca de: <b>${escapeHtml(q.near)}</b></div>` : ''}
       <div class="qc-row"><b>${relativeTime(q.time)}</b> · ${formatUtc(q.time)}</div>
       <div class="qc-row">Profundidad: <b>${depth}</b></div>
       <div class="qc-row">Coordenadas: <b>${coords}</b> (${precision})</div>
@@ -191,6 +179,51 @@
     el.quakeCard.querySelector('.qc-close').addEventListener('click', () => {
       el.quakeCard.classList.add('hidden');
     });
+    appendGeoRow(q);
+  }
+
+  // ---------- Reverse geocoding of the open card ----------
+  // Only the tap/click card triggers a lookup (never the hover tooltip, which
+  // would spam the geocoder). Results are cached per quake id, and a token
+  // guards against a late response landing after a different card opened.
+
+  const geoCache = new Map(); // quake id -> label string | null
+  let geoToken = 0;
+
+  function appendGeoRow(q) {
+    // Quakes annotated server-side already carry `near` (label or null) and
+    // quakeCardHtml rendered the row; the fetch fallback only serves quakes
+    // from stale payloads that predate the annotation (deploy transition).
+    if (q.near !== undefined) return;
+    const token = ++geoToken;
+    const insert = (html) => {
+      const row = document.createElement('div');
+      row.className = 'qc-row';
+      row.innerHTML = html;
+      const link = el.quakeCard.querySelector('.qc-link');
+      if (link) el.quakeCard.insertBefore(row, link);
+      else el.quakeCard.appendChild(row);
+      return row;
+    };
+
+    if (geoCache.has(q.id)) {
+      const label = geoCache.get(q.id);
+      if (label) insert(`Cerca de: <b>${escapeHtml(label)}</b>`);
+      return;
+    }
+
+    const row = insert('<span style="opacity:.7">Buscando ubicación…</span>');
+    fetch(`/api/geocode?lat=${q.lat}&lon=${q.lon}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((data) => {
+        geoCache.set(q.id, data.place || null);
+        if (token !== geoToken) return; // another card opened meanwhile
+        if (data.place) row.innerHTML = `Cerca de: <b>${escapeHtml(data.place)}</b>`;
+        else row.remove();
+      })
+      .catch(() => {
+        if (token === geoToken) row.remove();
+      });
   }
 
   // When a tap lands on a cluster, let the user pick instead of guessing.
@@ -239,12 +272,6 @@
     .backgroundImageUrl(lowPower ? null : 'https://unpkg.com/three-globe/example/img/night-sky.png')
     .atmosphereColor('#3a6ea5')
     .atmosphereAltitude(0.18)
-    .htmlLat('lat')
-    .htmlLng('lon')
-    // Must match labelAltitude exactly — any height difference shifts the
-    // pulse away from its quake circle through parallax.
-    .htmlAltitude(0.008)
-    .htmlElement(pulseElement)
     .ringLat('lat')
     .ringLng('lon')
     .ringColor((ring) => (t) => {
@@ -273,8 +300,7 @@
 
     // Taps are detected manually (pointer down/up with little movement) and
     // converted to globe coordinates with toGlobeCoords, so selection works
-    // no matter which layer catches the raycast — onGlobeClick never fires
-    // over land because the transparent country polygons sit above the globe.
+    // no matter which layer catches the raycast.
     let downX = 0;
     let downY = 0;
     let downAt = 0;
@@ -316,27 +342,88 @@
       .onLabelClick((q) => showQuakeCard(q));
   }
 
-  // Country borders: transparent caps with a subtle stroke, so quakes stay readable.
-  // Non-fatal if the atlas CDN fails — the globe still works without outlines.
-  fetch('https://unpkg.com/world-atlas@2.0.2/countries-110m.json')
-    .then((res) => {
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    })
-    .then((topo) => {
-      const countries = window.topojson.feature(topo, topo.objects.countries).features;
-      globe
-        .polygonsData(countries)
-        .polygonCapColor(() => 'rgba(0,0,0,0)')
-        .polygonSideColor(() => 'rgba(0,0,0,0)')
-        .polygonStrokeColor(() => 'rgba(170,190,215,0.45)')
-        .polygonAltitude(0.004)
-        .polygonsTransitionDuration(0)
-        .polygonLabel(({ properties: p }) => `<div class="country-label">${escapeHtml(p.name)}</div>`);
-    })
-    .catch((err) => {
-      console.warn('Country borders unavailable:', err);
-    });
+  // Political borders — countries AND admin-1 states/provinces — as native GL
+  // vector lines. A texture bake was tried first but blurs/fattens on deep
+  // zoom (texture magnification, inherent); GL lines keep a constant ~1px
+  // on-screen width at every zoom. Perf stays flat because each set is ONE
+  // merged THREE.LineSegments (two draw calls total) — never one mesh per
+  // feature. GL ignores lineWidth > 1, so the country > province hierarchy
+  // comes from opacity. The globe mesh is static in globe.gl (the camera
+  // orbits), so scene-space objects stay glued to the surface. Each data set
+  // fails independently; if THREE itself cannot load, lines are skipped.
+  (function buildBorderLines() {
+    const fetchJson = (url) =>
+      fetch(url).then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      });
+
+    Promise.all([
+      // Dynamic import instead of a <script type=module> global: no load-order
+      // race, and a failed CDN load rejects right here into the catch below.
+      // Pinned near globe.gl@2's bundled three so cross-instance objects
+      // (BufferGeometry/LineSegments, whose structure is stable) remain
+      // compatible with globe.gl's renderer.
+      import('https://unpkg.com/three@0.180.0/build/three.module.js'),
+      Promise.allSettled([
+        fetchJson('admin1-lines.json'),
+        fetchJson('https://unpkg.com/world-atlas@2.0.2/countries-110m.json')
+      ])
+    ])
+      .then(([THREE, [admin1Res, countriesRes]]) => {
+        const u = window.BorderUtils;
+        if (!u || !window.topojson) throw new Error('border helpers unavailable');
+
+        // MultiLineString coordinates per set; a failed fetch just skips its set.
+        const admin1Lines =
+          admin1Res.status === 'fulfilled'
+            ? window.topojson.feature(admin1Res.value, admin1Res.value.objects.admin1)
+                .features[0].geometry.coordinates
+            : null;
+        // mesh() dedupes shared borders into a single MultiLineString.
+        const countryLines =
+          countriesRes.status === 'fulfilled'
+            ? window.topojson.mesh(countriesRes.value, countriesRes.value.objects.countries)
+                .coordinates
+            : null;
+        if (admin1Res.status === 'rejected') console.warn('Admin-1 boundaries unavailable:', admin1Res.reason);
+        if (countriesRes.status === 'rejected') console.warn('Country borders unavailable:', countriesRes.reason);
+
+        // One merged LineSegments per set: every polyline expands into
+        // independent segment pairs sharing a single position buffer.
+        // Altitudes sit above the surface but below the quake dots (0.008);
+        // globe.getCoords does the lat/lon/alt -> scene xyz conversion.
+        const addLineSet = (lines, altitude, opacity) => {
+          const positions = [];
+          for (const line of lines) {
+            const vertices = line.map(([lon, lat]) => {
+              const { x, y, z } = globe.getCoords(lat, lon, altitude);
+              return [x, y, z];
+            });
+            for (const v of u.polylineToSegmentPairs(vertices)) {
+              positions.push(v[0], v[1], v[2]);
+            }
+          }
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+          const material = new THREE.LineBasicMaterial({
+            color: 0xbecde1,
+            transparent: true,
+            opacity
+          });
+          globe.scene().add(new THREE.LineSegments(geometry, material));
+          return positions.length / 3;
+        };
+
+        const admin1Vertices = admin1Lines ? addLineSet(admin1Lines, 0.002, 0.3) : 0;
+        const countryVertices = countryLines ? addLineSet(countryLines, 0.003, 0.75) : 0;
+        // In-page instrumentation so border construction can be verified.
+        window.__bordersDebug = { admin1Vertices, countryVertices };
+      })
+      .catch((err) => {
+        console.warn('Vector borders unavailable:', err);
+      });
+  })();
 
   globe.controls().autoRotate = true;
   globe.controls().autoRotateSpeed = 0.6;
@@ -413,14 +500,13 @@
       globe.labelsData(renderedMarkers);
     }
 
-    // Expand/contract wave: ONLY last-hour quakes get it.
+    // Propagating rings drawn on the sphere itself (exact position at any
+    // zoom): last-hour quakes colored by magnitude, damaging quakes magenta.
     const lastHour = base.filter((q) => Date.now() - Date.parse(q.time) <= RECENT_MS);
-    globe.htmlElementsData(lastHour);
-
-    // Damaging quakes keep their propagating magenta ring for tracking.
-    globe.ringsData(
-      damagingVisible.map((q) => ({ lat: q.lat, lon: q.lon, mag: q.magnitude, rgb: COLORS.magenta }))
-    );
+    globe.ringsData([
+      ...lastHour.map((q) => ({ lat: q.lat, lon: q.lon, mag: q.magnitude, rgb: magRgb(q.magnitude, false) })),
+      ...damagingVisible.map((q) => ({ lat: q.lat, lon: q.lon, mag: q.magnitude, rgb: COLORS.magenta }))
+    ]);
 
     const total = state.quakes.length + (state.filters.showDamaging ? state.damaging.length : 0);
     const shown = base.length + damagingVisible.length;

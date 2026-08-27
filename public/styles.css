@@ -346,38 +346,6 @@ html, body {
 /* globe.gl injects the hover tooltip as .scene-tooltip */
 .scene-tooltip { pointer-events: none; }
 
-/* Country name shown when hovering a border polygon */
-.country-label {
-  background: rgba(16, 20, 33, 0.85);
-  border: 1px solid var(--panel-border);
-  border-radius: 6px;
-  padding: 3px 8px;
-  font-size: 0.75rem;
-  color: var(--text-dim);
-}
-
-/* ---------- Last-hour pulse wave ---------- */
-
-.pulse-wrap {
-  width: 0;
-  height: 0;
-  position: relative;
-  pointer-events: none;
-}
-.pulse-ring {
-  position: absolute;
-  top: 0;
-  left: 0;
-  transform: translate(-50%, -50%);
-  border: 2px solid;
-  border-radius: 50%;
-  animation: quake-wave 1.6s ease-in-out infinite;
-}
-@keyframes quake-wave {
-  0%, 100% { scale: 0.45; opacity: 0.95; }
-  50% { scale: 1.4; opacity: 0.3; }
-}
-
 /* ---------- Sponsor badge ---------- */
 
 .sponsor {

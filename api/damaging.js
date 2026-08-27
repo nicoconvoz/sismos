@@ -9,6 +9,7 @@
 
 import { fetchDamagingQuakes } from '../lib/volcanodiscovery.js';
 import { fetchDamagingYear } from '../lib/usgs.js';
+import { annotateNear } from '../lib/geocode.js';
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -44,6 +45,8 @@ export default async function handler(req, res) {
   try {
     const year = new Date(now).getUTCFullYear();
     const { source, quakes, fallbackReason } = await loadDamaging(year);
+    // Offline nearest-city labels for synchronous "Cerca de:" rendering.
+    annotateNear(quakes);
     const payload = {
       updatedAt: new Date(now).toISOString(),
       source,

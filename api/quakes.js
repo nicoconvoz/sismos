@@ -4,17 +4,30 @@
 // VolcanoDiscovery is attempted first, but its "hoy" page only server-renders
 // ~9 recent rows (M >= 3.5); the full list is loaded by client-side JS with no
 // stable public JSON endpoint. When the VD parse yields fewer than
-// VD_MIN_QUAKES usable quakes, we automatically fall back to USGS + EMSC,
-// fetched in parallel and merged with time/distance dedupe: USGS all_day
-// covers the US densely but misses most sub-M4 quakes elsewhere, while EMSC
-// (seismicportal.eu) fills in the rest of the world (e.g. South America).
-// If only one of the two succeeds, it serves alone. In practice this merged
-// fallback serves the endpoint (source: 'usgs+emsc').
+// VD_MIN_QUAKES usable quakes, we fall back to four catalogs fetched in
+// parallel and merged with time/distance dedupe:
+// - Local agencies (highest priority — they win over global duplicates):
+//   INPRES (Argentina, lib/inpres.js) and CSN Chile (lib/csn.js).
+// - Global catalogs: USGS all_day (dense US coverage) merged with EMSC
+//   (seismicportal.eu — fills in sub-M4 quakes outside the US).
+// Local-vs-global dedupe window: we measured all 26 real INPRES/CSN vs
+// USGS/EMSC duplicate pairs on 2026-08-27 — origin-time deltas were 0-18 s
+// (max 18 s), so the standard 90 s window covers cross-agency differences
+// with a 5x margin. A wider 120 s window was considered and rejected: it
+// found zero additional pairs while raising the risk of wrongly suppressing
+// distinct aftershocks in swarms (mergeQuakes still accepts maxDtMs if the
+// data ever changes).
+// Any source may fail without breaking the endpoint; `source` lists only the
+// catalogs that contributed quakes (e.g. 'inpres+csn+usgs+emsc').
 
 import { fetchHoyQuakes } from '../lib/volcanodiscovery.js';
 import { fetchAllDay } from '../lib/usgs.js';
 import { fetchEmsc24h } from '../lib/emsc.js';
+import { fetchInpres } from '../lib/inpres.js';
+import { fetchCsn } from '../lib/csn.js';
 import { filterByTimeWindow, mergeQuakes, sortByTimeDesc } from '../lib/normalize.js';
+import { annotateNear } from '../lib/geocode.js';
+
 
 // Minimum quake count for the VolcanoDiscovery scrape to be considered a
 // usable primary result for a worldwide 24h view.
@@ -38,20 +51,29 @@ async function loadQuakes() {
   } catch (err) {
     vdError = err.message;
   }
-  // USGS + EMSC in parallel; merge when both succeed (USGS as primary,
-  // EMSC filling in non-duplicate events), otherwise use whichever worked.
-  const [usgsRes, emscRes] = await Promise.allSettled([fetchAllDay(), fetchEmsc24h()]);
-  const usgs = usgsRes.status === 'fulfilled' ? filterByTimeWindow(usgsRes.value, 24) : null;
-  const emsc = emscRes.status === 'fulfilled' ? filterByTimeWindow(emscRes.value, 24) : null;
-
-  if (usgs && emsc) {
-    return { source: 'usgs+emsc', quakes: sortByTimeDesc(mergeQuakes(usgs, emsc)), fallbackReason: vdError };
-  }
-  if (usgs) return { source: 'usgs', quakes: usgs, fallbackReason: vdError };
-  if (emsc) return { source: 'emsc', quakes: emsc, fallbackReason: vdError };
-  throw new Error(
-    `all sources failed: ${vdError}; usgs: ${usgsRes.reason?.message}; emsc: ${emscRes.reason?.message}`
+  // Four catalogs in parallel; local agencies get merge priority so their
+  // solutions replace matching USGS/EMSC duplicates.
+  const results = await Promise.allSettled([fetchInpres(), fetchCsn(), fetchAllDay(), fetchEmsc24h()]);
+  const [inpres, csn, usgs, emsc] = results.map((r) =>
+    r.status === 'fulfilled' ? filterByTimeWindow(r.value, 24) : null
   );
+
+  if (!inpres && !csn && !usgs && !emsc) {
+    const reasons = results.map((r) => r.reason?.message).join('; ');
+    throw new Error(`all sources failed: ${vdError}; ${reasons}`);
+  }
+
+  // Local networks rarely overlap, but dedupe the AR/CL border anyway.
+  const local = mergeQuakes(inpres || [], csn || []);
+  const global = usgs && emsc ? mergeQuakes(usgs, emsc) : usgs || emsc || [];
+  const merged = sortByTimeDesc(mergeQuakes(local, global));
+
+  const counts = {};
+  for (const q of merged) counts[q.source] = (counts[q.source] || 0) + 1;
+  const source =
+    ['inpres', 'csn', 'usgs', 'emsc'].filter((s) => counts[s] > 0).join('+') || 'none';
+
+  return { source, sourceCounts: counts, quakes: merged, fallbackReason: vdError };
 }
 
 export default async function handler(req, res) {
@@ -65,10 +87,14 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { source, quakes, fallbackReason } = await loadQuakes();
+    const { source, sourceCounts, quakes, fallbackReason } = await loadQuakes();
+    // Offline nearest-city labels so tooltips can render "Cerca de:"
+    // synchronously; runs once per cache rebuild (spatially indexed).
+    annotateNear(quakes);
     const payload = {
       updatedAt: new Date(now).toISOString(),
       source,
+      ...(sourceCounts ? { sourceCounts } : {}),
       ...(fallbackReason ? { fallbackReason } : {}),
       count: quakes.length,
       quakes

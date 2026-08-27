@@ -8,7 +8,8 @@ import {
   sortByTimeDesc,
   dedupeById,
   haversineKm,
-  mergeQuakes
+  mergeQuakes,
+  localTimeToUtc
 } from '../lib/normalize.js';
 
 test('makeQuake normalizes types and derives fields', () => {
@@ -111,6 +112,35 @@ test('mergeQuakes keeps nearby-but-different-time and same-time-far-away quakes'
   const sameTimeFar = { id: 's2', time: t, lat: 35, lon: 139, magnitude: 4 };
   const merged = mergeQuakes(primary, [sameSpotLater, sameTimeFar]);
   assert.deepEqual(merged.map((q) => q.id).sort(), ['p1', 's1', 's2']);
+});
+
+test('mergeQuakes accepts a custom time tolerance for cross-agency merges', () => {
+  const primary = [{ id: 'local', time: '2026-08-27T12:00:00Z', lat: -33, lon: -70, magnitude: 4 }];
+  // 110 s apart, 30 km away: duplicate only with the widened 120 s window.
+  const secondary = [{ id: 'global', time: '2026-08-27T12:01:50Z', lat: -33.2, lon: -70.2, magnitude: 4.1 }];
+  assert.deepEqual(mergeQuakes(primary, secondary).map((q) => q.id), ['local', 'global']);
+  assert.deepEqual(
+    mergeQuakes(primary, secondary, { maxDtMs: 120000 }).map((q) => q.id),
+    ['local']
+  );
+});
+
+test('localTimeToUtc converts zone-local wall time to UTC across DST', () => {
+  // Argentina: fixed UTC-3, no DST.
+  assert.equal(
+    localTimeToUtc({ year: 2026, month: 8, day: 27, hour: 9, minute: 38, second: 0 }, 'America/Argentina/Buenos_Aires').toISOString(),
+    '2026-08-27T12:38:00.000Z'
+  );
+  // Chile winter: UTC-4 (verified against the official CSN informe UTC time).
+  assert.equal(
+    localTimeToUtc({ year: 2026, month: 8, day: 27, hour: 8, minute: 59, second: 15 }, 'America/Santiago').toISOString(),
+    '2026-08-27T12:59:15.000Z'
+  );
+  // Chile summer (DST): UTC-3.
+  assert.equal(
+    localTimeToUtc({ year: 2026, month: 1, day: 15, hour: 8, minute: 0, second: 0 }, 'America/Santiago').toISOString(),
+    '2026-01-15T11:00:00.000Z'
+  );
 });
 
 test('mergeQuakes handles empty lists', () => {
