@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>Sismos — Terremotos de las últimas 24 horas</title>
+  <meta name="description" content="Globo 3D interactivo con los terremotos de todo el mundo en las últimas 24 horas." />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1>Sismos <span class="subtitle">últimas 24 horas</span></h1>
+    </div>
+    <div class="topbar-right">
+      <span id="counter" class="counter" title="Sismos visibles según los filtros">—</span>
+      <span id="updated" class="updated"></span>
+      <button id="refreshBtn" class="btn" title="Actualizar los datos ahora">Actualizar</button>
+      <button id="panelToggle" class="btn btn-icon" aria-label="Mostrar u ocultar filtros" title="Filtros">☰ Filtros</button>
+    </div>
+  </header>
+
+  <aside id="panel" class="panel">
+    <div id="panelHandle" class="panel-handle" aria-hidden="true"></div>
+    <section class="panel-section">
+      <h2>Filtros</h2>
+
+      <label class="field">
+        <span class="field-label">Magnitud mínima: <strong id="magValue">0.0</strong></span>
+        <input id="magSlider" type="range" min="0" max="8" step="0.1" value="0" />
+      </label>
+
+      <label class="field">
+        <span class="field-label">Periodo</span>
+        <select id="windowSelect">
+          <option value="1">Última hora</option>
+          <option value="3">Últimas 3 horas</option>
+          <option value="6">Últimas 6 horas</option>
+          <option value="12">Últimas 12 horas</option>
+          <option value="24" selected>Últimas 24 horas</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Continente</span>
+        <select id="continentSelect">
+          <option value="">Todos</option>
+          <option>África</option>
+          <option>América del Norte</option>
+          <option>América del Sur</option>
+          <option>Antártida</option>
+          <option>Asia</option>
+          <option>Europa</option>
+          <option>Oceanía</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field-label">País o región</span>
+        <input id="placeInput" type="text" placeholder="Ej.: Chile, Japón, Alaska…" autocomplete="off" />
+      </label>
+
+      <label class="field field-toggle">
+        <input id="damagingToggle" type="checkbox" />
+        <span>Últimos terremotos de este año</span>
+        <small class="hint">Muestra los sismos dañinos del año en curso con un color especial.</small>
+      </label>
+    </section>
+
+    <section class="panel-section legend">
+      <h2>Leyenda</h2>
+      <ul class="legend-list">
+        <li><span class="dot dot-green"></span> Magnitud &lt; 3</li>
+        <li><span class="dot dot-yellow"></span> Magnitud 3 – 4.5</li>
+        <li><span class="dot dot-orange"></span> Magnitud 4.5 – 6</li>
+        <li><span class="dot dot-red"></span> Magnitud 6 o más</li>
+        <li><span class="dot dot-magenta pulse"></span> Sismo dañino del año</li>
+      </ul>
+      <p class="legend-note">Los sismos de la última hora se marcan con ondas que se propagan desde el epicentro; los más antiguos (hasta 24 h) se ven más tenues. El tamaño del punto crece con la magnitud.</p>
+    </section>
+  </aside>
+
+  <main id="globeWrap">
+    <div id="globe"></div>
+
+    <div id="loading" class="overlay">
+      <div class="spinner"></div>
+      <p>Cargando sismos…</p>
+    </div>
+
+    <div id="errorBox" class="overlay hidden">
+      <p>No se pudieron cargar los datos de sismos.<br />Comprueba tu conexión e inténtalo de nuevo.</p>
+      <button id="retryBtn" class="btn">Reintentar</button>
+    </div>
+
+    <div id="quakeCard" class="quake-card hidden" role="dialog" aria-label="Detalle del sismo"></div>
+
+    <button id="toast" class="toast hidden" title="Ver el sismo más fuerte"></button>
+
+    <div class="sponsor">
+      <img src="open-doors.jpg" alt="Logo de RESOURCES OPEN DOORS S.A.S" class="sponsor-logo" />
+      <div class="sponsor-info">
+        <span class="sponsor-label">Financiado por</span>
+        <span class="sponsor-name">RESOURCES OPEN DOORS S.A.S</span>
+      </div>
+      <a class="btn sponsor-donate" href="mailto:ingenieriaaplicada@opendoors.com.ar?subject=Donaci%C3%B3n%20-%20Sismos">Donar</a>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/globe.gl@2"></script>
+  <script src="https://unpkg.com/topojson-client@3"></script>
+  <script type="module" src="borders.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
