@@ -632,6 +632,38 @@
     el.panel.classList.toggle('open');
   });
 
+  // Mobile bottom sheet: dragging the handle downward dismisses the panel.
+  // The panel follows the finger; releasing past the threshold closes it,
+  // otherwise it snaps back.
+  const panelHandle = $('panelHandle');
+  if (panelHandle) {
+    let dragStartY = null;
+    panelHandle.addEventListener('pointerdown', (e) => {
+      dragStartY = e.clientY;
+      el.panel.style.transition = 'none';
+      try {
+        panelHandle.setPointerCapture(e.pointerId);
+      } catch {
+        // Synthetic events have no active pointer — the drag still works.
+      }
+    });
+    panelHandle.addEventListener('pointermove', (e) => {
+      if (dragStartY == null) return;
+      const dy = Math.max(0, e.clientY - dragStartY);
+      el.panel.style.transform = `translateY(${dy}px)`;
+    });
+    const endPanelDrag = (e) => {
+      if (dragStartY == null) return;
+      const dy = e.clientY - dragStartY;
+      dragStartY = null;
+      el.panel.style.transition = '';
+      el.panel.style.transform = '';
+      if (dy > 70) el.panel.classList.remove('open');
+    };
+    panelHandle.addEventListener('pointerup', endPanelDrag);
+    panelHandle.addEventListener('pointercancel', endPanelDrag);
+  }
+
   // ---------- Boot ----------
 
   loadQuakes({ initial: true });

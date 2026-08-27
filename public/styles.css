@@ -114,6 +114,9 @@ html, body {
   padding: 14px 16px;
 }
 
+/* Drag handle: only shown on mobile, where the panel is a bottom sheet */
+.panel-handle { display: none; }
+
 .panel h2 {
   margin: 0 0 10px;
   font-size: 0.8rem;
@@ -435,6 +438,21 @@ html, body {
     transition: transform 0.25s ease;
   }
   .panel.open { transform: translateY(0); }
+
+  .panel-handle {
+    display: flex;
+    justify-content: center;
+    padding: 2px 0 12px;
+    cursor: grab;
+    touch-action: none; /* the handle owns the vertical gesture */
+  }
+  .panel-handle::before {
+    content: '';
+    width: 44px;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.28);
+  }
 
   .quake-card {
     left: 12px;
