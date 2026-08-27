@@ -269,12 +269,40 @@
       .pointRadius(pointRadius)
       .pointsMerge(true)
       .pointResolution(6)
-      .pointsTransitionDuration(0)
-      .onGlobeClick(({ lat, lng }) => {
-        const near = quakesNear(lat, lng);
-        if (near.length === 1) showQuakeCard(near[0]);
-        else if (near.length > 1) showQuakePicker(near);
-      });
+      .pointsTransitionDuration(0);
+
+    // Taps are detected manually (pointer down/up with little movement) and
+    // converted to globe coordinates with toGlobeCoords, so selection works
+    // no matter which layer catches the raycast — onGlobeClick never fires
+    // over land because the transparent country polygons sit above the globe.
+    let downX = 0;
+    let downY = 0;
+    let downAt = 0;
+    let multiTouch = false;
+    let activePointers = 0;
+    el.globe.addEventListener('pointerdown', (e) => {
+      activePointers += 1;
+      if (activePointers > 1) {
+        multiTouch = true; // pinch in progress — not a tap
+        return;
+      }
+      multiTouch = false;
+      downX = e.clientX;
+      downY = e.clientY;
+      downAt = Date.now();
+    });
+    el.globe.addEventListener('pointerup', (e) => {
+      activePointers = Math.max(0, activePointers - 1);
+      if (multiTouch || activePointers > 0) return;
+      const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
+      if (moved > 8 || Date.now() - downAt > 600) return; // drag, not a tap
+      const rect = el.globe.getBoundingClientRect();
+      const coords = globe.toGlobeCoords(e.clientX - rect.left, e.clientY - rect.top);
+      if (!coords) return; // tapped outer space
+      const near = quakesNear(coords.lat, coords.lng);
+      if (near.length === 1) showQuakeCard(near[0]);
+      else if (near.length > 1) showQuakePicker(near);
+    });
   } else {
     globe
       .labelLat('lat')
