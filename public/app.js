@@ -59,13 +59,15 @@
 
   // ---------- Formatting helpers (Spanish UI copy) ----------
 
-  const utcFmt = new Intl.DateTimeFormat('es-ES', {
-    timeZone: 'UTC',
+  // No explicit timeZone: each viewer sees quake times in their own local
+  // zone (the browser's), with the GMT offset appended so it is unambiguous.
+  const localFmt = new Intl.DateTimeFormat('es', {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
+    timeZoneName: 'short'
   });
 
   function relativeTime(iso) {
@@ -80,8 +82,8 @@
     return `hace ${d} día${d > 1 ? 's' : ''}`;
   }
 
-  function formatUtc(iso) {
-    return `${utcFmt.format(new Date(iso))} UTC`;
+  function formatLocal(iso) {
+    return localFmt.format(new Date(iso));
   }
 
   function escapeHtml(s) {
@@ -166,7 +168,7 @@
       </div>
       <div class="qc-place">${escapeHtml(q.place || 'Ubicación desconocida')}</div>
       ${q.near ? `<div class="qc-row">Cerca de: <b>${escapeHtml(q.near)}</b></div>` : ''}
-      <div class="qc-row"><b>${relativeTime(q.time)}</b> · ${formatUtc(q.time)}</div>
+      <div class="qc-row"><b>${relativeTime(q.time)}</b> · ${formatLocal(q.time)}</div>
       <div class="qc-row">Profundidad: <b>${depth}</b></div>
       <div class="qc-row">Coordenadas: <b>${coords}</b> (${precision})</div>
       <div class="qc-row">Fuente: <b>${src}</b></div>
