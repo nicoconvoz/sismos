@@ -314,6 +314,19 @@ html, body {
 }
 .qc-close:hover { color: var(--text); }
 
+/* Mochila reference infographic (lazy-loaded inside the modal) */
+.mochila-info-toggle {
+  width: 100%;
+  margin-bottom: 12px;
+}
+.mochila-info-img {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin-bottom: 14px;
+  border: 1px solid var(--panel-border);
+}
+
 /* Cluster picker (tap landed on several nearby quakes) */
 .qc-pick-title {
   font-weight: 600;
@@ -391,6 +404,130 @@ html, body {
 .sponsor-donate {
   text-decoration: none;
   font-weight: 700;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  /* Keep the badge inside the viewport on phones: let the buttons wrap
+     under the logo/name row instead of overflowing horizontally. */
+  .sponsor {
+    left: 12px;
+    right: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .sponsor-name { white-space: normal; }
+}
+
+/* ---------- Mochila de Emergencia modal ---------- */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 7, 12, 0.7);
+  backdrop-filter: blur(2px);
+}
+.modal-card {
+  position: relative;
+  z-index: 1;
+  width: min(460px, 100%);
+  max-height: min(86vh, 100%);
+  overflow-y: auto;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(8px);
+  padding: 18px 20px;
+  -webkit-overflow-scrolling: touch;
+}
+.modal-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-size: 1.2rem;
+}
+.modal-title {
+  margin: 0 18px 14px 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.modal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 12px;
+}
+@media (max-width: 400px) {
+  .modal-grid { grid-template-columns: 1fr; gap: 0; }
+}
+#mochilaForm .field { margin-bottom: 10px; }
+#mochilaForm input,
+#mochilaForm select {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--panel-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 0.85rem;
+  outline: none;
+  color-scheme: dark; /* native pickers (date/select) in dark */
+}
+#mochilaForm input:focus,
+#mochilaForm select:focus { border-color: var(--accent); }
+#mochilaForm .field.invalid input,
+#mochilaForm .field.invalid select { border-color: var(--red); }
+.field-error {
+  display: block;
+  color: var(--red);
+  font-size: 0.72rem;
+  margin-top: 3px;
+}
+.modal-submit {
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 14px;
+  font-weight: 700;
+}
+.modal-privacy {
+  margin: 8px 0 0;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.4;
+}
+.modal-error {
+  margin: 10px 0 0;
+  color: var(--red);
+  font-size: 0.8rem;
+  text-align: center;
+}
+.modal-success {
+  padding: 26px 6px;
+  text-align: center;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* Honeypot: off-screen, never display:none (some bots skip hidden inputs). */
+.hp-field {
+  position: absolute;
+  left: -9999px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* ---------- New-quake toast ---------- */
@@ -442,13 +579,15 @@ html, body {
   .panel-handle {
     display: flex;
     justify-content: center;
-    padding: 2px 0 12px;
+    align-items: center;
+    min-height: 34px; /* generous touch target */
+    padding-bottom: 6px;
     cursor: grab;
     touch-action: none; /* the handle owns the vertical gesture */
   }
   .panel-handle::before {
     content: '';
-    width: 44px;
+    width: 56px;
     height: 5px;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.28);

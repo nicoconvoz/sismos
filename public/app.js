@@ -54,7 +54,14 @@
     panel: $('panel'),
     panelToggle: $('panelToggle'),
     quakeCard: $('quakeCard'),
-    toast: $('toast')
+    toast: $('toast'),
+    mochilaBtn: $('mochilaBtn'),
+    mochilaModal: $('mochilaModal'),
+    mochilaForm: $('mochilaForm'),
+    mochilaClose: $('mochilaClose'),
+    mochilaSubmit: $('mochilaSubmit'),
+    mochilaError: $('mochilaError'),
+    mochilaSuccess: $('mochilaSuccess')
   };
 
   // ---------- Formatting helpers (Spanish UI copy) ----------
@@ -632,6 +639,142 @@
     el.panel.classList.toggle('open');
   });
 
+  // ---------- Mochila de Emergencia lead form ----------
+  // Our own modal; /api/mochila validates and forwards to a Google Form
+  // server-side, so the destination is never exposed to the visitor.
+
+  // Client-side mirror of the server rules (lib/mochila.js is authoritative).
+  const MOCHILA_MESSAGES = {
+    required: 'Este campo es obligatorio.',
+    invalid_email: 'Ingresá un email válido.',
+    invalid_age: 'Ingresá una edad entre 1 y 120.',
+    invalid_phone: 'Ingresá un teléfono válido (al menos 6 dígitos).',
+    invalid_dni: 'Ingresá un D.N.I. válido (6 a 10 dígitos).'
+  };
+
+  function mochilaFieldError(name, value) {
+    if (!value) return 'required';
+    if (name === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)) return 'invalid_email';
+    if (name === 'edad') {
+      const n = Number(value);
+      if (!Number.isInteger(n) || n < 1 || n > 120) return 'invalid_age';
+    }
+    if (name === 'telefono' && value.replace(/\D/g, '').length < 6) return 'invalid_phone';
+    if (name === 'dni') {
+      const digits = value.replace(/\D/g, '');
+      if (digits.length < 6 || digits.length > 10) return 'invalid_dni';
+    }
+    return null;
+  }
+
+  function setFieldError(input, code) {
+    const field = input.closest('.field');
+    if (!field) return;
+    const msg = field.querySelector('.field-error');
+    if (code) {
+      field.classList.add('invalid');
+      msg.textContent = MOCHILA_MESSAGES[code] || 'Revisá este campo.';
+      msg.classList.remove('hidden');
+    } else {
+      field.classList.remove('invalid');
+      msg.textContent = '';
+      msg.classList.add('hidden');
+    }
+  }
+
+  function openMochila() {
+    el.mochilaForm.classList.remove('hidden');
+    el.mochilaSuccess.classList.add('hidden');
+    el.mochilaError.classList.add('hidden');
+    el.mochilaModal.classList.remove('hidden');
+    const first = el.mochilaForm.querySelector('input[name="nombre"]');
+    if (first) first.focus();
+  }
+
+  function closeMochila() {
+    el.mochilaModal.classList.add('hidden');
+  }
+
+  el.mochilaBtn.addEventListener('click', openMochila);
+  el.mochilaClose.addEventListener('click', closeMochila);
+
+  // Reference infographic: src is only set the first time the visitor asks
+  // for it — form-only visits never download the image.
+  const infoToggle = $('mochilaInfoToggle');
+  const infoImg = $('mochilaInfoImg');
+  if (infoToggle && infoImg) {
+    infoToggle.addEventListener('click', () => {
+      if (!infoImg.getAttribute('src')) infoImg.src = 'mochila.jpg';
+      const nowHidden = infoImg.classList.toggle('hidden');
+      infoToggle.textContent = nowHidden ? 'Ver qué incluye la mochila ▾' : 'Ocultar el contenido ▴';
+    });
+  }
+  el.mochilaModal.addEventListener('click', (e) => {
+    if (e.target.hasAttribute('data-close')) closeMochila();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !el.mochilaModal.classList.contains('hidden')) closeMochila();
+  });
+
+  el.mochilaForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    el.mochilaError.classList.add('hidden');
+
+    const payload = {};
+    let firstInvalid = null;
+    for (const control of el.mochilaForm.querySelectorAll('input[name], select[name]')) {
+      const name = control.name;
+      const value = control.value.trim();
+      payload[name] = value;
+      if (name === 'website') continue; // honeypot travels as-is
+      const code = mochilaFieldError(name, value);
+      setFieldError(control, code);
+      if (code && !firstInvalid) firstInvalid = control;
+    }
+    if (firstInvalid) {
+      firstInvalid.focus();
+      return;
+    }
+
+    el.mochilaSubmit.disabled = true;
+    el.mochilaSubmit.textContent = 'Enviando…';
+    try {
+      const res = await fetch('/api/mochila', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        el.mochilaForm.classList.add('hidden');
+        el.mochilaSuccess.classList.remove('hidden');
+        el.mochilaForm.reset();
+        setTimeout(closeMochila, 3000);
+      } else if (res.status === 503 && data.error === 'not_configured') {
+        el.mochilaError.textContent = 'El formulario estará disponible muy pronto.';
+        el.mochilaError.classList.remove('hidden');
+      } else if (res.status === 400 && data.field) {
+        const control = el.mochilaForm.querySelector(`[name="${data.field}"]`);
+        if (control) {
+          setFieldError(control, data.error);
+          control.focus();
+        }
+        el.mochilaError.textContent = 'Revisá los datos marcados e intentá de nuevo.';
+        el.mochilaError.classList.remove('hidden');
+      } else {
+        throw new Error(`HTTP ${res.status}`);
+      }
+    } catch (err) {
+      console.warn('Mochila form submit failed:', err);
+      el.mochilaError.textContent = 'No pudimos enviar el formulario. Intentá de nuevo en unos minutos.';
+      el.mochilaError.classList.remove('hidden');
+    } finally {
+      el.mochilaSubmit.disabled = false;
+      el.mochilaSubmit.textContent = 'Enviar';
+    }
+  });
+
   // Mobile bottom sheet: dragging the handle downward dismisses the panel.
   // The panel follows the finger; releasing past the threshold closes it,
   // otherwise it snaps back.
@@ -642,14 +785,41 @@
 
     let dragStartY = null;
     let lastY = 0;
+    let dragStartTime = 0;
+    let dragEngaged = false; // true once the gesture is claimed as a dismiss
+
+    // Controls keep their own gestures; everything else on the panel drags.
+    const isInteractive = (t) =>
+      Boolean(t.closest && t.closest('input, select, button, a, textarea'));
+
+    const cleanupDrag = () => {
+      dragStartY = null;
+      dragEngaged = false;
+      window.removeEventListener('pointermove', onPanelDragMove);
+      window.removeEventListener('pointerup', onPanelDragEnd);
+      window.removeEventListener('pointercancel', onPanelDragEnd);
+    };
 
     // Move/up tracked on window: even if pointer capture fails or the browser
     // hesitates on the first gesture, the drag keeps receiving events.
     const onPanelDragMove = (e) => {
       if (dragStartY == null) return;
       lastY = e.clientY;
-      const dy = Math.max(0, e.clientY - dragStartY);
-      el.panel.style.transform = `translateY(${dy}px)`;
+      const dy = e.clientY - dragStartY;
+      if (!dragEngaged) {
+        // Claim the gesture only when pulling DOWN with the sheet scrolled to
+        // its top; otherwise abandon and let native panel scrolling happen.
+        if (dy > 8 && el.panel.scrollTop <= 0) {
+          dragEngaged = true;
+          el.panel.style.transition = 'none';
+        } else if (dy < -8 || el.panel.scrollTop > 0) {
+          cleanupDrag();
+          return;
+        } else {
+          return;
+        }
+      }
+      el.panel.style.transform = `translateY(${Math.max(0, dy)}px)`;
       e.preventDefault();
     };
     const onPanelDragEnd = (e) => {
@@ -657,30 +827,55 @@
       // pointercancel may carry no coordinates — fall back to the last move.
       const endY = typeof e.clientY === 'number' && e.clientY !== 0 ? e.clientY : lastY;
       const dy = endY - dragStartY;
-      dragStartY = null;
+      const velocity = dy / Math.max(1, Date.now() - dragStartTime); // px/ms
+      const engaged = dragEngaged;
+      cleanupDrag();
       el.panel.style.transition = '';
       el.panel.style.transform = '';
-      window.removeEventListener('pointermove', onPanelDragMove);
-      window.removeEventListener('pointerup', onPanelDragEnd);
-      window.removeEventListener('pointercancel', onPanelDragEnd);
-      if (dy > 70) el.panel.classList.remove('open');
+      // Distance OR a quick downward flick dismisses.
+      if (engaged && (dy > 50 || (dy > 15 && velocity > 0.5))) {
+        el.panel.classList.remove('open');
+      }
+    };
+
+    const beginPanelDrag = (e, fromHandle) => {
+      dragStartY = e.clientY;
+      lastY = e.clientY;
+      dragStartTime = Date.now();
+      dragEngaged = fromHandle; // the handle claims the gesture immediately
+      if (fromHandle) el.panel.style.transition = 'none';
+      window.addEventListener('pointermove', onPanelDragMove, { passive: false });
+      window.addEventListener('pointerup', onPanelDragEnd);
+      window.addEventListener('pointercancel', onPanelDragEnd);
     };
 
     panelHandle.addEventListener('pointerdown', (e) => {
-      dragStartY = e.clientY;
-      lastY = e.clientY;
-      el.panel.style.transition = 'none';
       try {
         panelHandle.setPointerCapture(e.pointerId);
       } catch {
         // Synthetic events have no active pointer — window listeners cover it.
       }
-      window.addEventListener('pointermove', onPanelDragMove, { passive: false });
-      window.addEventListener('pointerup', onPanelDragEnd);
-      window.addEventListener('pointercancel', onPanelDragEnd);
+      beginPanelDrag(e, true);
       // Claim the gesture before the browser decides it is a scroll.
       e.preventDefault();
     });
+
+    // The WHOLE panel is a drag surface: any spot that is not a form control
+    // can start the swipe (it only engages on a downward pull from the top).
+    el.panel.addEventListener('pointerdown', (e) => {
+      if (panelHandle.contains(e.target) || isInteractive(e.target)) return;
+      beginPanelDrag(e, false);
+    });
+
+    // Native scrolling is driven by touch events; once the dismiss gesture is
+    // engaged this non-passive guard stops the panel from scrolling under it.
+    el.panel.addEventListener(
+      'touchmove',
+      (e) => {
+        if (dragEngaged) e.preventDefault();
+      },
+      { passive: false }
+    );
   }
 
   // ---------- Boot ----------

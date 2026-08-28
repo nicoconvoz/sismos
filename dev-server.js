@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import quakesHandler from './api/quakes.js';
 import damagingHandler from './api/damaging.js';
 import geocodeHandler from './api/geocode.js';
+import mochilaHandler from './api/mochila.js';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
 const PORT = Number(process.env.PORT) || 3000;
@@ -27,7 +28,8 @@ const MIME = {
 const API_ROUTES = {
   '/api/quakes': quakesHandler,
   '/api/damaging': damagingHandler,
-  '/api/geocode': geocodeHandler
+  '/api/geocode': geocodeHandler,
+  '/api/mochila': mochilaHandler
 };
 
 /** Minimal Vercel-style res shim on top of node:http ServerResponse. */
