@@ -318,6 +318,7 @@ html, body {
 .mochila-info-toggle {
   width: 100%;
   margin-bottom: 12px;
+  color: #7ee2a8; /* light green text only — the button keeps its default look */
 }
 .mochila-info-img {
   width: 100%;
