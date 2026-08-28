@@ -118,50 +118,22 @@
         <img id="mochilaInfoImg" class="mochila-info-img hidden" alt="Contenido de la Mochila de Emergencia: kit de subsistencia para 72 horas" />
 
         <form id="mochilaForm" novalidate>
-          <label class="field">
-            <span class="field-label">Nombre:</span>
-            <input type="text" name="nombre" autocomplete="name" maxlength="200" />
-            <span class="field-error hidden"></span>
-          </label>
           <div class="modal-grid">
             <label class="field">
-              <span class="field-label">Edad:</span>
-              <input type="number" name="edad" min="1" max="120" inputmode="numeric" />
+              <span class="field-label">Nombre:</span>
+              <input type="text" name="nombre" autocomplete="given-name" maxlength="200" />
               <span class="field-error hidden"></span>
             </label>
             <label class="field">
-              <span class="field-label">Sexo:</span>
-              <select name="sexo">
-                <option value="">Seleccionar…</option>
-                <option>Femenino</option>
-                <option>Masculino</option>
-                <option>Otro</option>
-                <option>Prefiero no decir</option>
-              </select>
+              <span class="field-label">Apellido:</span>
+              <input type="text" name="apellido" autocomplete="family-name" maxlength="200" />
               <span class="field-error hidden"></span>
             </label>
           </div>
           <div class="modal-grid">
             <label class="field">
-              <span class="field-label">Fecha de Nacimiento:</span>
-              <input type="date" name="fechaNacimiento" />
-              <span class="field-error hidden"></span>
-            </label>
-            <label class="field">
-              <span class="field-label">D.N.I.:</span>
-              <input type="text" name="dni" inputmode="numeric" maxlength="200" />
-              <span class="field-error hidden"></span>
-            </label>
-          </div>
-          <label class="field">
-            <span class="field-label">Teléfono:</span>
-            <input type="tel" name="telefono" autocomplete="tel" maxlength="200" />
-            <span class="field-error hidden"></span>
-          </label>
-          <div class="modal-grid">
-            <label class="field">
-              <span class="field-label">Localidad:</span>
-              <input type="text" name="localidad" maxlength="200" />
+              <span class="field-label">País:</span>
+              <input type="text" name="pais" autocomplete="country-name" maxlength="200" />
               <span class="field-error hidden"></span>
             </label>
             <label class="field">
@@ -171,8 +143,8 @@
             </label>
           </div>
           <label class="field">
-            <span class="field-label">Dirección:</span>
-            <input type="text" name="direccion" autocomplete="street-address" maxlength="200" />
+            <span class="field-label">Teléfono:</span>
+            <input type="tel" name="telefono" autocomplete="tel" maxlength="200" />
             <span class="field-error hidden"></span>
           </label>
           <label class="field">

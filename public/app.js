@@ -647,23 +647,13 @@
   const MOCHILA_MESSAGES = {
     required: 'Este campo es obligatorio.',
     invalid_email: 'Ingresá un email válido.',
-    invalid_age: 'Ingresá una edad entre 1 y 120.',
-    invalid_phone: 'Ingresá un teléfono válido (al menos 6 dígitos).',
-    invalid_dni: 'Ingresá un D.N.I. válido (6 a 10 dígitos).'
+    invalid_phone: 'Ingresá un teléfono válido (al menos 6 dígitos).'
   };
 
   function mochilaFieldError(name, value) {
     if (!value) return 'required';
     if (name === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)) return 'invalid_email';
-    if (name === 'edad') {
-      const n = Number(value);
-      if (!Number.isInteger(n) || n < 1 || n > 120) return 'invalid_age';
-    }
     if (name === 'telefono' && value.replace(/\D/g, '').length < 6) return 'invalid_phone';
-    if (name === 'dni') {
-      const digits = value.replace(/\D/g, '');
-      if (digits.length < 6 || digits.length > 10) return 'invalid_dni';
-    }
     return null;
   }
 
