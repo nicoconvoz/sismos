@@ -697,6 +697,7 @@
 
   el.mochilaBtn.addEventListener('click', openMochila);
   el.mochilaClose.addEventListener('click', closeMochila);
+  $('mochilaCancel').addEventListener('click', closeMochila);
 
   // Reference infographic: src is only set the first time the visitor asks
   // for it — form-only visits never download the image.
