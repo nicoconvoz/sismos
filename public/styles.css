@@ -407,6 +407,14 @@ html, body {
   white-space: nowrap;
 }
 
+/* The Mochila button stands out in yellow */
+#mochilaBtn {
+  color: var(--yellow);
+  border-color: rgba(241, 196, 15, 0.45);
+  background: rgba(241, 196, 15, 0.12);
+}
+#mochilaBtn:hover { background: rgba(241, 196, 15, 0.25); }
+
 @media (max-width: 560px) {
   /* Keep the badge inside the viewport on phones: let the buttons wrap
      under the logo/name row instead of overflowing horizontally. */
