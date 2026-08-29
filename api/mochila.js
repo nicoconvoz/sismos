@@ -36,8 +36,13 @@ export default async function handler(req, res) {
   if (body === null) return res.status(400).json({ error: 'invalid_json' });
 
   // Bots that fill the hidden trap field get a silent 200 — no forwarding,
-  // and no signal that they were detected.
-  if (isHoneypotTripped(body)) return res.status(200).json({ ok: true });
+  // and no signal that they were detected. Logged server-side so silent
+  // drops are never invisible during diagnosis (mobile autofill once filled
+  // this field for real users; the frontend now always sends it empty).
+  if (isHoneypotTripped(body)) {
+    console.warn('mochila: honeypot tripped, submission dropped (no forward)');
+    return res.status(200).json({ ok: true });
+  }
 
   const result = validateMochila(body);
   if (!result.ok) return res.status(400).json({ error: result.error, field: result.field });

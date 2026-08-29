@@ -715,9 +715,16 @@
     let firstInvalid = null;
     for (const control of el.mochilaForm.querySelectorAll('input[name], select[name]')) {
       const name = control.name;
+      if (name === 'website') {
+        // Honeypot: mobile autofill fills hidden "website" fields despite
+        // autocomplete="off", which made the server silently drop REAL
+        // submissions. Humans always go through this code path, so always
+        // send it empty; only bots POSTing the scraped form directly trip it.
+        payload[name] = '';
+        continue;
+      }
       const value = control.value.trim();
       payload[name] = value;
-      if (name === 'website') continue; // honeypot travels as-is
       const code = mochilaFieldError(name, value);
       setFieldError(control, code);
       if (code && !firstInvalid) firstInvalid = control;
