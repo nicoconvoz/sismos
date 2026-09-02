@@ -26,6 +26,9 @@ import { fetchInpres } from '../lib/inpres.js';
 import { fetchCsn } from '../lib/csn.js';
 import { fetchNhc } from '../lib/nhc.js';
 import { fetchFirms } from '../lib/firms.js';
+import { fetchSmn } from '../lib/smn.js';
+import { fetchMeteoalarm } from '../lib/meteoalarm.js';
+import { fetchSwic } from '../lib/swic.js';
 import { filterByTimeWindow, mergeEvents, sortByTimeDesc } from '../lib/normalize.js';
 import { annotateNear } from '../lib/geocode.js';
 
@@ -48,7 +51,7 @@ const GDACS_EQ_MERGE = { maxDtMs: 90 * 1000, maxKm: 150 };
 // events (storm/cyclone).
 const CYCLONE_MERGE = { maxDtMs: 72 * 3600 * 1000, maxKm: 500 };
 
-const SOURCE_ORDER = ['gdacs', 'inpres', 'csn', 'usgs', 'emsc', 'nhc', 'eonet', 'firms'];
+const SOURCE_ORDER = ['gdacs', 'inpres', 'csn', 'usgs', 'emsc', 'nhc', 'smn', 'meteoalarm', 'swic', 'eonet', 'firms'];
 
 async function loadEvents() {
   const results = await Promise.allSettled([
@@ -58,10 +61,13 @@ async function loadEvents() {
     fetchUsgs(),
     fetchEmsc24h(),
     fetchNhc(),
+    fetchSmn(),
+    fetchMeteoalarm(),
+    fetchSwic(),
     fetchEonet(),
     fetchFirms()
   ]);
-  const [gdacs, inpres, csn, usgs, emsc, nhc, eonet, firms] = results.map((r) =>
+  const [gdacs, inpres, csn, usgs, emsc, nhc, smn, meteoalarm, swic, eonet, firms] = results.map((r) =>
     r.status === 'fulfilled' ? filterByTimeWindow(r.value, MAX_AGE_HOURS) : null
   );
 
@@ -82,6 +88,13 @@ async function loadEvents() {
   let merged = gdacs || [];
   merged = mergeEvents(merged, quakes, GDACS_EQ_MERGE);
   if (nhc) merged = mergeEvents(merged, nhc, CYCLONE_MERGE);
+  // SMN warnings are region-level forecasts (wind, snow, heat) — distinct
+  // kinds from the phenomena catalogs, so overlap is minimal.
+  if (smn) merged = mergeEvents(merged, smn);
+  if (meteoalarm) merged = mergeEvents(merged, meteoalarm);
+  // WMO relay of Latin American national warnings (Argentina skipped —
+  // the native SMN adapter is richer).
+  if (swic) merged = mergeEvents(merged, swic);
   if (eonet) merged = mergeEvents(merged, eonet);
   if (firms) merged = mergeEvents(merged, firms);
   merged = sortByTimeDesc(merged);

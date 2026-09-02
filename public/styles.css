@@ -250,12 +250,24 @@ html, body {
 .badge-gigante { background: rgba(255, 77, 94, 0.18); color: var(--red); }
 .badge-alert-red { background: var(--red); color: #fff; border-color: var(--red); }
 .badge-alert-orange { background: var(--orange); color: #201004; border-color: var(--orange); }
+.badge-alert-yellow { background: var(--yellow); color: #221a02; border-color: var(--yellow); }
 .badge-alert-green { background: rgba(63, 208, 138, 0.25); color: var(--green); }
 .badge-source { color: var(--muted); }
 
 .ec-rows { margin: 0; font-size: 13px; color: var(--muted); }
 .ec-rows div { padding: 2px 0; }
 .ec-rows strong { color: var(--text); font-weight: 600; }
+
+.ec-details {
+  margin: 6px 0 2px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
 
 .ec-link {
   display: inline-block;

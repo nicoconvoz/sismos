@@ -60,6 +60,12 @@ test('alertMagnitude keeps each GDACS alert level inside its tier band', () => {
     assert.equal(tierFor(m), 'gigante', `red score=${score} -> ${m}`);
     assert.ok(m <= 10);
   }
+  // Yellow (CAP Moderate, e.g. SMN) sits above green, still "mediano".
+  for (const score of [0, 2, 4, 10]) {
+    const m = alertMagnitude('yellow', score);
+    assert.equal(tierFor(m), 'mediano', `yellow score=${score} -> ${m}`);
+  }
+  assert.ok(alertMagnitude('yellow', 0) > alertMagnitude('green', 0));
   // A higher score means a higher magnitude within the band.
   assert.ok(alertMagnitude('orange', 3) > alertMagnitude('orange', 0));
   // Unknown levels fall back to a small default.

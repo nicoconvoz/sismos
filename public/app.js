@@ -34,6 +34,9 @@
     inpres: 'INPRES',
     csn: 'CSN Chile',
     nhc: 'NOAA NHC',
+    smn: 'SMN Argentina',
+    meteoalarm: 'MeteoAlarm',
+    swic: 'WMO',
     firms: 'NASA FIRMS'
   };
 
@@ -93,8 +96,26 @@
     return Math.pow(1 + ageHours / 6, -1.1);
   }
 
+  // An official warning whose phenomenon has not started yet (SMN onset in
+  // the future) is at peak relevance NOW — never dim it.
+  function warningUpcoming(e) {
+    return Boolean(e.starts) && Date.parse(e.starts) > Date.now();
+  }
+
+  // Latest-activity clock: the agency update, or the phenomenon's own start
+  // once it has begun — a warning ages from its onset, not its issue time.
+  function activityMs(e) {
+    var t = Date.parse(e.updated || e.time);
+    if (e.starts) {
+      var s = Date.parse(e.starts);
+      if (s <= Date.now()) t = Math.max(t, s);
+    }
+    return t;
+  }
+
   function ageHours(evento) {
-    return (Date.now() - Date.parse(evento.updated || evento.time)) / 3600000;
+    if (warningUpcoming(evento)) return 0;
+    return (Date.now() - activityMs(evento)) / 3600000;
   }
 
   // ---------- Globe ----------
@@ -338,10 +359,10 @@
     renderedEvents = events;
     globe.pointsData(events);
     // Any kind ripples on fresh ACTIVITY: quakes by origin time, ongoing
-    // events (fires, floods, cyclones) by their latest agency update —
-    // start dates alone would leave everything but quakes silent.
+    // events (fires, floods, cyclones) by their latest agency update, and
+    // official warnings while their phenomenon is still upcoming.
     globe.ringsData(events.filter(function (e) {
-      return e.alert === 'red' || now - Date.parse(e.updated || e.time) <= RECENT_RING_MS;
+      return e.alert === 'red' || warningUpcoming(e) || now - activityMs(e) <= RECENT_RING_MS;
     }));
     els.counter.textContent = events.length + ' ' + I18n.t('events', LANG);
     renderToast(events);
@@ -476,6 +497,17 @@
       I18n.t('unifiedScale', LANG) + '</div>');
     if (e.severity && e.severity.text) {
       rows.push('<div>' + I18n.t('signal', LANG) + ': <strong>' + escapeHtml(e.severity.text) + '</strong></div>');
+    }
+    // Forecaster prose with the event-specific numbers (gust speeds and
+    // direction, expected snowfall, temperatures) — SMN alerts carry it.
+    if (e.details) {
+      rows.push('<div class="ec-details">' + escapeHtml(e.details) + '</div>');
+    }
+    // Official agency zone (SMN: Cordillera/Llanura/Patagonia), with the
+    // province for context — the polygon centroid can sit far from towns.
+    if (e.area) {
+      var zoneTxt = e.area + (e.nearData && e.nearData.admin1 ? ' — ' + e.nearData.admin1 : '');
+      rows.push('<div>' + I18n.t('zone', LANG) + ': <strong>' + escapeHtml(zoneTxt) + '</strong></div>');
     }
     if (e.nearData) {
       rows.push('<div>' + I18n.t('near', LANG) + ': <strong>' +
