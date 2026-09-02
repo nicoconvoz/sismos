@@ -267,6 +267,44 @@ html, body {
 
 .ec-link:hover { text-decoration: underline; }
 
+/* Swarm picker: choose one event when a tap lands on a cluster */
+
+.ec-pick-title {
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding-right: 18px;
+}
+
+.ec-pick {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 7px 10px;
+  margin-bottom: 6px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ec-pick:hover { border-color: var(--accent); }
+.ec-pick-mag { font-weight: 800; flex: none; }
+
+.ec-pick-place {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ec-pick-time { color: var(--muted); flex: none; font-size: 0.72rem; }
+.ec-pick-more { color: var(--muted); font-size: 0.72rem; margin-top: 2px; }
+
 .ec-close {
   position: absolute;
   top: 8px;

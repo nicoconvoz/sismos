@@ -120,7 +120,15 @@
       // Touch devices fire hover + click on the same tap, so the hover
       // bubble and the card would open together; keep only the card there.
       .pointLabel(isTouch() ? function () { return null; } : tooltipHtml)
-      .onPointClick(showCard)
+      // Clicks resolve by proximity against rendered events (the original
+      // sismos model): per-mesh picking on flat discs is unreliable, and
+      // this also lets a click BETWEEN packed circles open the swarm picker.
+      .onGlobeClick(function (coords) {
+        if (!coords) return;
+        var near = eventsNear(coords.lat, coords.lng);
+        if (near.length === 1) showCard(near[0]);
+        else if (near.length > 1) showEventPicker(near);
+      })
       // Rings, like the old sismos globe: red alerts ripple in red; events
       // that entered within the last hour ripple in their tier color.
       .ringColor(function (d) {
@@ -320,9 +328,14 @@
 
   var RECENT_RING_MS = 3600 * 1000; // activity within the last hour ripples
 
+  // Markers currently on the globe — the swarm picker resolves clicks
+  // against this list.
+  var renderedEvents = [];
+
   function render() {
     var events = visibleEvents();
     var now = Date.now();
+    renderedEvents = events;
     globe.pointsData(events);
     // Any kind ripples on fresh ACTIVITY: quakes by origin time, ongoing
     // events (fires, floods, cyclones) by their latest agency update —
@@ -376,6 +389,69 @@
     alertTimer = setTimeout(function () {
       els.alertToast.classList.add('hidden');
     }, ALERT_HIDE_MS);
+  }
+
+  // ---------- Swarm picker (ported from the sismos globe) ----------
+  // When a click/tap lands on a cluster of overlapping events, let the user
+  // pick instead of guessing which circle was meant.
+
+  function eventsNear(lat, lng) {
+    // Tolerance shrinks proportionally with zoom, so zooming in genuinely
+    // increases selection precision (degrees of arc).
+    var tol = Math.max(0.15, 3.5 * zoomScale);
+    var cosLat = Math.cos((lat * Math.PI) / 180);
+    return renderedEvents
+      .map(function (e) {
+        var dLat = e.lat - lat;
+        var dLon = (((e.lon - lng + 540) % 360) - 180) * cosLat;
+        return { e: e, d: Math.hypot(dLat, dLon) };
+      })
+      .filter(function (x) { return x.d <= tol; })
+      .sort(function (a, b) { return a.d - b.d; })
+      .map(function (x) { return x.e; });
+  }
+
+  function relativeTime(iso) {
+    var mins = Math.round((Date.parse(iso) - Date.now()) / 60000);
+    var rtf = new Intl.RelativeTimeFormat(LANG, { numeric: 'auto' });
+    if (Math.abs(mins) < 60) return rtf.format(mins, 'minute');
+    if (Math.abs(mins) < 48 * 60) return rtf.format(Math.round(mins / 60), 'hour');
+    return rtf.format(Math.round(mins / (24 * 60)), 'day');
+  }
+
+  function showEventPicker(events) {
+    // Newest ACTIVITY first, matching the period filter's clock: an ongoing
+    // fire that started days ago but flared today ranks (and reads) by its
+    // latest update, not its start date.
+    var activityOf = function (e) { return Date.parse(e.updated || e.time); };
+    var shown = events.slice().sort(function (a, b) {
+      return activityOf(b) - activityOf(a);
+    }).slice(0, 6);
+    var rows = shown.map(function (e, i) {
+      return '<button class="ec-pick" data-i="' + i + '">' +
+        '<span class="ec-pick-mag" style="color:' + (TIER_COLORS[e.tier] || '#9aa7bb') + '">' +
+        e.magnitude.toFixed(1) + '</span>' +
+        '<span class="ec-pick-place">' + escapeHtml(titleOf(e)) + '</span>' +
+        '<span class="ec-pick-time">' + relativeTime(e.updated || e.time) + '</span>' +
+        '</button>';
+    }).join('');
+    var extra = events.length > shown.length
+      ? '<div class="ec-pick-more">' +
+        I18n.t('pickerMore', LANG).replace('{n}', events.length - shown.length) + '</div>'
+      : '';
+    els.card.innerHTML =
+      '<button class="ec-close" aria-label="Cerrar">×</button>' +
+      '<div class="ec-pick-title">' + I18n.t('pickerTitle', LANG) + '</div>' +
+      rows + extra;
+    els.card.classList.remove('hidden');
+    els.card.querySelector('.ec-close').onclick = function () {
+      els.card.classList.add('hidden');
+    };
+    els.card.querySelectorAll('.ec-pick').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        showCard(shown[Number(btn.getAttribute('data-i'))]);
+      });
+    });
   }
 
   function tooltipHtml(e) {
