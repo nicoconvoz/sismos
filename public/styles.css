@@ -149,6 +149,9 @@ html, body {
   pointer-events: none;
 }
 
+/* Drag handle: mobile-only pill for swipe-down dismissal. */
+.panel-handle { display: none; }
+
 .panel-section { padding: 10px 0; }
 .panel-section + .panel-section { border-top: 1px solid var(--panel-border); }
 
@@ -659,7 +662,46 @@ button.ec-link { background: none; border: none; padding: 0; font: inherit; curs
      small gap instead of spreading across the whole row. */
   .topbar-right { width: 100%; justify-content: flex-start; gap: 8px; }
   .topbar-right #refreshBtn { margin-left: auto; }
-  .panel { width: calc(100vw - 24px); top: 96px; max-height: calc(100vh - 120px); }
+  /* Filters become a bottom sheet (like the old sismos app): slides up
+     from below and swipes down to dismiss. */
+  .panel {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 74vh;
+    max-height: 74dvh;
+    border-radius: 14px 14px 0 0;
+    border-left: none;
+    border-right: none;
+    border-bottom: none;
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  .panel.collapsed {
+    transform: translateY(105%);
+    opacity: 1;
+  }
+
+  .panel-handle {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 34px; /* generous touch target */
+    padding-bottom: 6px;
+    cursor: grab;
+    touch-action: none; /* the handle owns the vertical gesture */
+  }
+
+  .panel-handle::before {
+    content: '';
+    width: 56px;
+    height: 5px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.28);
+  }
   .event-card { left: 12px; bottom: 12px; }
   .toast { bottom: auto; top: 104px; }
   .alert-toast { top: 148px; }

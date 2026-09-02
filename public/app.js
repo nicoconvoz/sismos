@@ -121,10 +121,11 @@
   // ---------- Globe ----------
 
   function initGlobe() {
-    // No bump map: it costs ~1 MB of texture for relief that is invisible
-    // at this scale — mobile loads matter more.
+    // No earth texture at all: a flat dark sphere, so the map shows ONLY
+    // what our system draws (borders + events). Also saves the texture
+    // downloads — mobile loads matter.
     globe = Globe()(els.globe)
-      .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-night.jpg')
+      .globeImageUrl(null)
       .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
       .atmosphereColor('#4ea1ff')
       .atmosphereAltitude(0.16)
@@ -182,6 +183,12 @@
         globe.ringMaxRadius(ringMaxRadius);
       }, 150);
     });
+
+    // Flat deep-blue material replaces the removed texture.
+    var globeMat = globe.globeMaterial();
+    globeMat.color.set('#0c1626');
+    if (globeMat.emissive) globeMat.emissive.set('#04080f');
+    globeMat.shininess = 0.2;
 
     globe.pointOfView({ lat: 10, lng: -30, altitude: 2.3 });
     globe.controls().autoRotate = true;
@@ -969,6 +976,94 @@
   els.panelToggle.addEventListener('click', function () {
     els.panel.classList.toggle('collapsed');
   });
+
+  // Mobile bottom sheet: dragging downward dismisses the filters panel
+  // (ported from the sismos globe). The panel follows the finger; releasing
+  // past the threshold — or a quick flick — closes it, otherwise it snaps
+  // back. The handle claims the gesture immediately; the rest of the panel
+  // only engages on a downward pull with the sheet scrolled to its top.
+  (function wirePanelDrag() {
+    var handle = $('panelHandle');
+    if (!handle) return;
+    handle.style.touchAction = 'none';
+
+    var dragStartY = null;
+    var lastY = 0;
+    var dragStartTime = 0;
+    var dragEngaged = false;
+
+    var isInteractive = function (t) {
+      return Boolean(t.closest && t.closest('input, select, button, a, textarea'));
+    };
+
+    var cleanupDrag = function () {
+      dragStartY = null;
+      dragEngaged = false;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+    };
+
+    var onMove = function (e) {
+      if (dragStartY == null) return;
+      lastY = e.clientY;
+      var dy = e.clientY - dragStartY;
+      if (!dragEngaged) {
+        if (dy > 8 && els.panel.scrollTop <= 0) {
+          dragEngaged = true;
+          els.panel.style.transition = 'none';
+        } else if (dy < -8 || els.panel.scrollTop > 0) {
+          cleanupDrag();
+          return;
+        } else {
+          return;
+        }
+      }
+      els.panel.style.transform = 'translateY(' + Math.max(0, dy) + 'px)';
+      e.preventDefault();
+    };
+
+    var onEnd = function (e) {
+      if (dragStartY == null) return;
+      var endY = typeof e.clientY === 'number' && e.clientY !== 0 ? e.clientY : lastY;
+      var dy = endY - dragStartY;
+      var velocity = dy / Math.max(1, Date.now() - dragStartTime);
+      var engaged = dragEngaged;
+      cleanupDrag();
+      els.panel.style.transition = '';
+      els.panel.style.transform = '';
+      if (engaged && (dy > 50 || (dy > 15 && velocity > 0.5))) {
+        els.panel.classList.add('collapsed');
+      }
+    };
+
+    var begin = function (e, fromHandle) {
+      if (window.innerWidth > 640) return; // sheet gesture is mobile-only
+      dragStartY = e.clientY;
+      lastY = e.clientY;
+      dragStartTime = Date.now();
+      dragEngaged = fromHandle;
+      if (fromHandle) els.panel.style.transition = 'none';
+      window.addEventListener('pointermove', onMove, { passive: false });
+      window.addEventListener('pointerup', onEnd);
+      window.addEventListener('pointercancel', onEnd);
+    };
+
+    handle.addEventListener('pointerdown', function (e) {
+      try {
+        handle.setPointerCapture(e.pointerId);
+      } catch (err) {
+        // Synthetic events have no active pointer — window listeners cover it.
+      }
+      begin(e, true);
+      e.preventDefault();
+    });
+
+    els.panel.addEventListener('pointerdown', function (e) {
+      if (handle.contains(e.target) || isInteractive(e.target)) return;
+      begin(e, false);
+    });
+  })();
   // Coming back to the tab refreshes immediately if the last load is stale,
   // so the "real time" feel survives phones suspending background tabs.
   document.addEventListener('visibilitychange', function () {
