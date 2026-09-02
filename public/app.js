@@ -883,7 +883,7 @@
     var infoToggle = $('mochilaInfoToggle');
     var infoImg = $('mochilaInfoImg');
     infoToggle.addEventListener('click', function () {
-      if (!infoImg.getAttribute('src')) infoImg.src = 'mochila.jpg';
+      if (!infoImg.getAttribute('src')) infoImg.src = 'mochila-marcada.jpg';
       var nowHidden = infoImg.classList.toggle('hidden');
       infoToggle.textContent = nowHidden ? 'Ver qué incluye la mochila ▾' : 'Ocultar el contenido ▴';
     });
