@@ -96,9 +96,12 @@
     return Math.pow(1 + ageHours / 6, -1.1);
   }
 
-  // An official warning whose phenomenon has not started yet (SMN onset in
-  // the future) is at peak relevance NOW — never dim it.
-  function warningUpcoming(e) {
+  // An official warning is ACTIVE for its whole validity window: from the
+  // moment it is issued until the phenomenon ENDS — halo ring, waves and
+  // full intensity persist throughout. Without an end date, only the
+  // pre-start phase counts.
+  function warningActive(e) {
+    if (e.ends) return Date.parse(e.ends) > Date.now();
     return Boolean(e.starts) && Date.parse(e.starts) > Date.now();
   }
 
@@ -114,7 +117,7 @@
   }
 
   function ageHours(evento) {
-    if (warningUpcoming(evento)) return 0;
+    if (warningActive(evento)) return 0;
     return (Date.now() - activityMs(evento)) / 3600000;
   }
 
@@ -142,7 +145,7 @@
       // dot reads as "not happening yet".
       .pointColor(function (d) {
         if (d.__halo) return colorFor(d);
-        return warningUpcoming(d) ? 'rgba(7,10,16,0.95)' : colorFor(d);
+        return warningActive(d) ? 'rgba(7,10,16,0.95)' : colorFor(d);
       })
       .pointRadius(pointRadius)
       .pointsMerge(false)
@@ -380,7 +383,7 @@
     renderedEvents = events;
     // Upcoming warnings (not started yet) get a white halo disc underneath:
     // magnitude color ringed in white marks "this is coming, not happening".
-    var halos = events.filter(warningUpcoming).map(function (e) {
+    var halos = events.filter(warningActive).map(function (e) {
       var h = Object.assign({}, e);
       h.__halo = true;
       return h;
@@ -390,7 +393,7 @@
     // events (fires, floods, cyclones) by their latest agency update, and
     // official warnings while their phenomenon is still upcoming.
     globe.ringsData(events.filter(function (e) {
-      return e.alert === 'red' || warningUpcoming(e) || now - activityMs(e) <= RECENT_RING_MS;
+      return e.alert === 'red' || warningActive(e) || now - activityMs(e) <= RECENT_RING_MS;
     }));
     els.counter.textContent = events.length + ' ' + I18n.t('events', LANG);
     renderToast(events);
@@ -547,6 +550,12 @@
     }
     if (e.continent) {
       rows.push('<div>' + I18n.t('continentRow', LANG) + ': ' + I18n.continentName(e.continent, LANG) + '</div>');
+    }
+    // Warnings show their full validity window in the viewer's own clock.
+    if (e.starts && e.ends) {
+      rows.push('<div>' + I18n.t('validity', LANG) + ': <strong>' +
+        I18n.formatDateTime(e.starts, LANG) + ' → ' +
+        I18n.formatDateTime(e.ends, LANG) + '</strong></div>');
     }
     // Dates render in the viewer's own clock (computer/phone timezone).
     rows.push('<div>' + I18n.t('start', LANG) + ': ' +
