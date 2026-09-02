@@ -4,8 +4,10 @@ import {
   validCoord,
   nearestCity,
   compass8,
+  compassIndex,
   buildNearLabel,
   reverseGeocode,
+  reverseGeocodeData,
   annotateNear,
   loadCities
 } from '../lib/geocode.js';
@@ -99,15 +101,39 @@ test('reverseGeocode against the real dataset resolves localities, not just prov
   assert.match(mendoza, /Argentina$/);
 });
 
-test('annotateNear sets near labels (or null) on every quake', () => {
-  const quakes = [
+test('compassIndex returns the 8-wind sector clockwise from north', () => {
+  assert.equal(compassIndex(0, 0, 1, 0), 0); // due north
+  assert.equal(compassIndex(0, 0, 0, 1), 2); // due east
+  assert.equal(compassIndex(0, 0, -1, 0), 4); // due south
+  assert.equal(compassIndex(0, 0, 0, -1), 6); // due west
+  assert.equal(compassIndex(0, 0, 1, 1), 1); // northeast
+});
+
+test('reverseGeocodeData returns structured fields for client-side localization', () => {
+  const d = reverseGeocodeData(-30.24, -68.75);
+  assert.ok(d, 'rural San Juan must resolve');
+  assert.match(d.name, /Jáchal/);
+  assert.equal(d.admin1, 'San Juan');
+  assert.equal(d.cc, 'AR');
+  assert.ok(Number.isFinite(d.distKm) && d.distKm >= 0);
+  assert.ok(Number.isInteger(d.dir) && d.dir >= 0 && d.dir <= 7);
+  // Mid-ocean -> null, same cutoff as the label path.
+  assert.equal(reverseGeocodeData(0, -140), null);
+});
+
+test('annotateNear sets near labels (or null) on every event', () => {
+  const events = [
     { id: 'a', lat: -30.24, lon: -68.75 }, // rural San Juan
     { id: 'b', lat: 0, lon: -140 } // mid-Pacific
   ];
-  const out = annotateNear(quakes);
-  assert.equal(out, quakes, 'mutates and returns the same array');
-  assert.match(quakes[0].near, /Jáchal/);
-  assert.equal(quakes[1].near, null);
+  const out = annotateNear(events);
+  assert.equal(out, events, 'mutates and returns the same array');
+  assert.match(events[0].near, /Jáchal/);
+  assert.equal(events[1].near, null);
+  // Structured twin for client-side localization.
+  assert.match(events[0].nearData.name, /Jáchal/);
+  assert.equal(events[0].nearData.cc, 'AR');
+  assert.equal(events[1].nearData, null);
 });
 
 test('spatial index returns exactly what the linear scan returns', () => {

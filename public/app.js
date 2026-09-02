@@ -1,396 +1,185 @@
-/* Sismos — frontend logic: data loading, filters and the 3D globe. */
-/* global Globe */
+// Perioteca frontend: 3D globe of ongoing world events.
+// Vanilla JS + globe.gl (CDN), loaded as a module so it runs after i18n.js
+// and borders.js have populated window.I18n / window.BorderUtils. Data comes
+// exclusively from /api/events — the browser never talks to the feeds.
 
-(() => {
+(function () {
   'use strict';
 
-  // ---------- Constants ----------
+  var API_URL = '/api/events';
+  // Near-real-time: the API caches upstream for ~5 min, but polling every
+  // minute picks a fresh payload up as soon as the cache rolls over.
+  var REFRESH_MS = 60 * 1000;
+  var ALERT_HIDE_MS = 15 * 1000;
 
-  const REFRESH_MS = 60 * 1000; // near-real-time polling (USGS feed updates ~every minute)
-  const TICK_MS = 30 * 1000; // "updated X min ago" ticker
-  const RECENT_MS = 60 * 60 * 1000; // quakes newer than this pulse
+  var I18n = window.I18n;
+  // Viewer language: ?lang= override first (shareable/testable), then the
+  // browser's own preference list.
+  var LANG = new URLSearchParams(location.search).get('lang');
+  LANG = I18n.pickLang(LANG ? [LANG] : navigator.languages || [navigator.language]);
+  document.documentElement.lang = LANG;
 
-  const COLORS = {
-    green: [46, 204, 113],
-    yellow: [241, 196, 15],
-    orange: [230, 126, 34],
-    red: [231, 76, 60],
-    magenta: [224, 64, 251]
+  var TIER_COLORS = {
+    'pequeño': '#3fd08a',
+    'mediano': '#ffd166',
+    'grande': '#ff8c42',
+    'gigante': '#ff4d5e'
   };
 
-  // ---------- State ----------
-
-  const state = {
-    quakes: [],
-    damaging: [],
-    damagingLoaded: false,
-    updatedAt: null,
-    filters: {
-      minMag: 0,
-      windowHours: 24,
-      continent: '',
-      text: '',
-      showDamaging: false
-    }
+  var SOURCE_LABELS = {
+    gdacs: 'GDACS',
+    eonet: 'NASA EONET',
+    usgs: 'USGS',
+    emsc: 'EMSC',
+    inpres: 'INPRES',
+    csn: 'CSN Chile',
+    nhc: 'NOAA NHC',
+    firms: 'NASA FIRMS'
   };
 
-  // ---------- DOM ----------
+  function $(id) { return document.getElementById(id); }
 
-  const $ = (id) => document.getElementById(id);
-  const el = {
+  var els = {
     globe: $('globe'),
     loading: $('loading'),
     errorBox: $('errorBox'),
     retryBtn: $('retryBtn'),
     refreshBtn: $('refreshBtn'),
-    updated: $('updated'),
+    panel: $('panel'),
+    panelToggle: $('panelToggle'),
     counter: $('counter'),
+    updated: $('updated'),
     magSlider: $('magSlider'),
     magValue: $('magValue'),
+    kindSelect: $('kindSelect'),
     windowSelect: $('windowSelect'),
     continentSelect: $('continentSelect'),
     placeInput: $('placeInput'),
-    damagingToggle: $('damagingToggle'),
-    panel: $('panel'),
-    panelToggle: $('panelToggle'),
-    quakeCard: $('quakeCard'),
+    alertToggle: $('alertToggle'),
+    card: $('eventCard'),
     toast: $('toast'),
-    mochilaBtn: $('mochilaBtn'),
-    mochilaModal: $('mochilaModal'),
-    mochilaForm: $('mochilaForm'),
-    mochilaClose: $('mochilaClose'),
-    mochilaSubmit: $('mochilaSubmit'),
-    mochilaError: $('mochilaError'),
-    mochilaSuccess: $('mochilaSuccess')
+    alertToast: $('alertToast'),
+    sourcesNote: $('sourcesNote')
   };
 
-  // ---------- Formatting helpers (Spanish UI copy) ----------
+  var allEvents = [];
+  var knownIds = null; // null until the first successful load
+  var globe = null;
+  var refreshTimer = null;
+  var lastLoadAt = 0;
+  var alertTimer = null;
 
-  // No explicit timeZone: each viewer sees quake times in their own local
-  // zone (the browser's), with the GMT offset appended so it is unambiguous.
-  const localFmt = new Intl.DateTimeFormat('es', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZoneName: 'short'
-  });
+  // ---------- Static UI translation ----------
 
-  function relativeTime(iso) {
-    const diff = Date.now() - Date.parse(iso);
-    const min = Math.round(diff / 60000);
-    if (min < 1) return 'hace instantes';
-    if (min < 60) return `hace ${min} min`;
-    const h = Math.floor(min / 60);
-    const rem = min % 60;
-    if (h < 24) return rem ? `hace ${h} h ${rem} min` : `hace ${h} h`;
-    const d = Math.floor(h / 24);
-    return `hace ${d} día${d > 1 ? 's' : ''}`;
-  }
-
-  function formatLocal(iso) {
-    return localFmt.format(new Date(iso));
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({
-      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-    })[c]);
-  }
-
-  // ---------- Colors / sizing ----------
-
-  function magRgb(mag, damaging) {
-    if (damaging) return COLORS.magenta;
-    if (mag < 3) return COLORS.green;
-    if (mag < 4.5) return COLORS.yellow;
-    if (mag < 6) return COLORS.orange;
-    return COLORS.red;
-  }
-
-  function recencyAlpha(iso) {
-    const age = Date.now() - Date.parse(iso);
-    if (age <= RECENT_MS) return 1;
-    const t = Math.min(1, age / (24 * 3600 * 1000));
-    return 1 - 0.35 * t; // fades down to ~0.65 at 24 h — older quakes must stay clearly visible
-  }
-
-  function pointColor(q) {
-    const [r, g, b] = magRgb(q.magnitude, q.damaging);
-    const a = q.damaging ? 0.95 : recencyAlpha(q.time);
-    return `rgba(${r},${g},${b},${a.toFixed(2)})`;
-  }
-
-  // Shrinks point radii as the camera zooms in, so clustered quakes separate
-  // and each point sits precisely on its coordinates. 1 at the default
-  // altitude (2.5), down to ~1/8 when fully zoomed in.
-  let zoomScale = 1;
-
-  function pointRadius(q) {
-    // Generous minimum size so micro-quakes (M < 2) remain visible on the globe.
-    return Math.max(0.32, 0.22 + 0.11 * Math.max(0, q.magnitude)) * zoomScale;
-  }
-
-  // Markers currently on the globe — needed to resolve taps manually on touch
-  // devices, where the merged mesh has no per-point events.
-  let renderedMarkers = [];
-
-  function quakesNear(lat, lng) {
-    // Tap tolerance shrinks proportionally with zoom, so zooming in genuinely
-    // increases selection precision (degrees of arc).
-    const tol = Math.max(0.15, 3.5 * zoomScale);
-    const cosLat = Math.cos((lat * Math.PI) / 180);
-    return renderedMarkers
-      .map((q) => {
-        const dLat = q.lat - lat;
-        const dLon = (((q.lon - lng + 540) % 360) - 180) * cosLat;
-        return { q, d: Math.hypot(dLat, dLon) };
-      })
-      .filter((x) => x.d <= tol)
-      .sort((a, b) => a.d - b.d)
-      .map((x) => x.q);
-  }
-
-
-  // ---------- Quake card HTML ----------
-
-  function quakeCardHtml(q, { closable = false } = {}) {
-    const [r, g, b] = magRgb(q.magnitude, q.damaging);
-    const coords = `${q.lat.toFixed(2)}°, ${q.lon.toFixed(2)}°`;
-    const depth = q.depthKm != null ? `${q.depthKm} km` : 'no disponible';
-    const src = {
-      usgs: 'USGS',
-      emsc: 'EMSC',
-      volcanodiscovery: 'VolcanoDiscovery',
-      inpres: 'INPRES',
-      csn: 'CSN (Chile)'
-    }[q.source] || q.source;
-    const precision = q.exactCoords ? 'exactas' : 'aproximadas';
-    return `
-      ${closable ? '<button class="qc-close" aria-label="Cerrar">×</button>' : ''}
-      <div class="qc-head">
-        <span class="qc-mag" style="color:rgb(${r},${g},${b})">M ${q.magnitude.toFixed(1)}</span>
-        ${q.damaging ? '<span class="qc-badge">Sismo dañino</span>' : ''}
-      </div>
-      <div class="qc-place">${escapeHtml(q.place || 'Ubicación desconocida')}</div>
-      ${q.near ? `<div class="qc-row">Cerca de: <b>${escapeHtml(q.near)}</b></div>` : ''}
-      <div class="qc-row"><b>${relativeTime(q.time)}</b> · ${formatLocal(q.time)}</div>
-      <div class="qc-row">Profundidad: <b>${depth}</b></div>
-      <div class="qc-row">Coordenadas: <b>${coords}</b> (${precision})</div>
-      <div class="qc-row">Fuente: <b>${src}</b></div>
-    `;
-  }
-
-  function showQuakeCard(q) {
-    el.quakeCard.innerHTML = quakeCardHtml(q, { closable: true });
-    el.quakeCard.classList.remove('hidden');
-    el.quakeCard.querySelector('.qc-close').addEventListener('click', () => {
-      el.quakeCard.classList.add('hidden');
+  function applyStatic() {
+    document.querySelectorAll('[data-i18n]').forEach(function (node) {
+      node.textContent = I18n.t(node.getAttribute('data-i18n'), LANG);
     });
-    appendGeoRow(q);
+    document.querySelectorAll('[data-i18n-ph]').forEach(function (node) {
+      node.placeholder = I18n.t(node.getAttribute('data-i18n-ph'), LANG);
+    });
+    // Continent options: values stay in Spanish (they match the data),
+    // display text localizes.
+    Array.prototype.forEach.call(els.continentSelect.options, function (opt) {
+      if (opt.value) opt.textContent = I18n.continentName(opt.value, LANG);
+    });
   }
 
-  // ---------- Reverse geocoding of the open card ----------
-  // Only the tap/click card triggers a lookup (never the hover tooltip, which
-  // would spam the geocoder). Results are cached per quake id, and a token
-  // guards against a late response landing after a different card opened.
+  // ---------- Magnitude engine mirrors (kept in sync with lib/magnitude.js) ----------
 
-  const geoCache = new Map(); // quake id -> label string | null
-  let geoToken = 0;
-
-  function appendGeoRow(q) {
-    // Quakes annotated server-side already carry `near` (label or null) and
-    // quakeCardHtml rendered the row; the fetch fallback only serves quakes
-    // from stale payloads that predate the annotation (deploy transition).
-    if (q.near !== undefined) return;
-    const token = ++geoToken;
-    const insert = (html) => {
-      const row = document.createElement('div');
-      row.className = 'qc-row';
-      row.innerHTML = html;
-      const link = el.quakeCard.querySelector('.qc-link');
-      if (link) el.quakeCard.insertBefore(row, link);
-      else el.quakeCard.appendChild(row);
-      return row;
-    };
-
-    if (geoCache.has(q.id)) {
-      const label = geoCache.get(q.id);
-      if (label) insert(`Cerca de: <b>${escapeHtml(label)}</b>`);
-      return;
-    }
-
-    const row = insert('<span style="opacity:.7">Buscando ubicación…</span>');
-    fetch(`/api/geocode?lat=${q.lat}&lon=${q.lon}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data) => {
-        geoCache.set(q.id, data.place || null);
-        if (token !== geoToken) return; // another card opened meanwhile
-        if (data.place) row.innerHTML = `Cerca de: <b>${escapeHtml(data.place)}</b>`;
-        else row.remove();
-      })
-      .catch(() => {
-        if (token === geoToken) row.remove();
-      });
+  // Omori-inspired decay: sharp initial drop, long tail.
+  function decayWeight(ageHours) {
+    if (!isFinite(ageHours) || ageHours <= 0) return 1;
+    return Math.pow(1 + ageHours / 6, -1.1);
   }
 
-  // When a tap lands on a cluster, let the user pick instead of guessing.
-  function showQuakePicker(quakes) {
-    const shown = quakes.slice(0, 6);
-    const rows = shown
-      .map((q, i) => {
-        const [r, g, b] = magRgb(q.magnitude, q.damaging);
-        return `<button class="qc-pick" data-i="${i}">
-          <span class="qc-pick-mag" style="color:rgb(${r},${g},${b})">M ${q.magnitude.toFixed(1)}</span>
-          <span class="qc-pick-place">${escapeHtml(q.place || 'Ubicación desconocida')}</span>
-          <span class="qc-pick-time">${relativeTime(q.time)}</span>
-        </button>`;
-      })
-      .join('');
-    const extra = quakes.length > shown.length
-      ? `<div class="qc-pick-more">Hay ${quakes.length - shown.length} más en esta zona — acercate para distinguirlos.</div>`
-      : '';
-    el.quakeCard.innerHTML = `
-      <button class="qc-close" aria-label="Cerrar">×</button>
-      <div class="qc-pick-title">Sismos cerca del punto tocado</div>
-      ${rows}${extra}`;
-    el.quakeCard.classList.remove('hidden');
-    el.quakeCard.querySelector('.qc-close').addEventListener('click', () => {
-      el.quakeCard.classList.add('hidden');
-    });
-    el.quakeCard.querySelectorAll('.qc-pick').forEach((btn) => {
-      btn.addEventListener('click', () => showQuakeCard(shown[Number(btn.dataset.i)]));
-    });
+  function ageHours(evento) {
+    return (Date.now() - Date.parse(evento.updated || evento.time)) / 3600000;
   }
 
   // ---------- Globe ----------
 
-  // Touch devices have no hover: the tap already opens the bottom card, so
-  // the hover tooltip would duplicate it.
-  const isTouch = window.matchMedia('(pointer: coarse)').matches;
+  function initGlobe() {
+    globe = Globe()(els.globe)
+      .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-night.jpg')
+      .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+      .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
+      .atmosphereColor('#4ea1ff')
+      .atmosphereAltitude(0.16)
+      // Events use lat/lon; globe.gl defaults to lat/lng.
+      .pointLat(function (d) { return d.lat; })
+      .pointLng(function (d) { return d.lon; })
+      .ringLat(function (d) { return d.lat; })
+      .ringLng(function (d) { return d.lon; })
+      .pointAltitude(0.01)
+      .pointColor(function (d) { return colorFor(d); })
+      .pointRadius(function (d) { return 0.14 + d.magnitude * 0.09; })
+      .pointsMerge(false)
+      .pointLabel(tooltipHtml)
+      .onPointClick(showCard)
+      // Rings, like the old sismos globe: red alerts ripple in red; events
+      // that entered within the last hour ripple in their tier color.
+      .ringColor(function (d) {
+        var rgb = d.alert === 'red' ? '255,77,94' : hexToRgb(TIER_COLORS[d.tier] || '#9aa7bb');
+        return function (t) { return 'rgba(' + rgb + ',' + (1 - t) + ')'; };
+      })
+      .ringMaxRadius(function (d) { return d.alert === 'red' ? 4.5 : 1.5 + d.magnitude * 0.4; })
+      .ringPropagationSpeed(1.3)
+      .ringRepeatPeriod(1400);
 
-  // Low-power tuning for phones/tablets: fewer cylinder segments, no bump
-  // map and a capped pixel ratio are imperceptible at handset sizes but cut
-  // GPU work drastically on older devices.
-  const lowPower = isTouch || window.matchMedia('(max-width: 820px)').matches;
+    globe.pointOfView({ lat: 10, lng: -30, altitude: 2.3 });
+    globe.controls().autoRotate = true;
+    globe.controls().autoRotateSpeed = 0.35;
+    els.globe.addEventListener('pointerdown', function () {
+      globe.controls().autoRotate = false;
+    }, { once: true });
 
-  const globe = Globe()(el.globe)
-    .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-dark.jpg')
-    .bumpImageUrl(lowPower ? null : 'https://unpkg.com/three-globe/example/img/earth-topology.png')
-    .backgroundImageUrl(lowPower ? null : 'https://unpkg.com/three-globe/example/img/night-sky.png')
-    .atmosphereColor('#3a6ea5')
-    .atmosphereAltitude(0.18)
-    .ringLat('lat')
-    .ringLng('lon')
-    .ringColor((ring) => (t) => {
-      const [r, g, b] = ring.rgb;
-      return `rgba(${r},${g},${b},${(1 - t).toFixed(2)})`;
-    })
-    .ringMaxRadius((ring) => 1.5 + ring.mag * 0.6)
-    .ringPropagationSpeed(1.6)
-    .ringRepeatPeriod(1100);
-
-  // Quake markers: flat circles on the surface in both modes.
-  // - Desktop: labels layer (empty-text flat dot) with per-quake hover/click.
-  // - Touch: 500+ individual meshes stutter on old phones, so all quakes merge
-  //   into a single mesh (one draw call) and taps resolve to the nearest quake
-  //   via onGlobeClick, since the merged mesh has no per-point events.
-  if (isTouch) {
-    globe
-      .pointLat('lat')
-      .pointLng('lon')
-      .pointColor(pointColor)
-      .pointAltitude(() => 0.0015 * zoomScale)
-      .pointRadius(pointRadius)
-      .pointsMerge(true)
-      .pointResolution(6)
-      .pointsTransitionDuration(0);
-
-    // Taps are detected manually (pointer down/up with little movement) and
-    // converted to globe coordinates with toGlobeCoords, so selection works
-    // no matter which layer catches the raycast.
-    let downX = 0;
-    let downY = 0;
-    let downAt = 0;
-    let multiTouch = false;
-    let activePointers = 0;
-    el.globe.addEventListener('pointerdown', (e) => {
-      activePointers += 1;
-      if (activePointers > 1) {
-        multiTouch = true; // pinch in progress — not a tap
-        return;
-      }
-      multiTouch = false;
-      downX = e.clientX;
-      downY = e.clientY;
-      downAt = Date.now();
+    window.addEventListener('resize', function () {
+      globe.width(window.innerWidth).height(window.innerHeight);
     });
-    el.globe.addEventListener('pointerup', (e) => {
-      activePointers = Math.max(0, activePointers - 1);
-      if (multiTouch || activePointers > 0) return;
-      const moved = Math.hypot(e.clientX - downX, e.clientY - downY);
-      if (moved > 8 || Date.now() - downAt > 600) return; // drag, not a tap
-      const rect = el.globe.getBoundingClientRect();
-      const coords = globe.toGlobeCoords(e.clientX - rect.left, e.clientY - rect.top);
-      if (!coords) return; // tapped outer space
-      const near = quakesNear(coords.lat, coords.lng);
-      if (near.length === 1) showQuakeCard(near[0]);
-      else if (near.length > 1) showQuakePicker(near);
-    });
-  } else {
-    globe
-      .labelLat('lat')
-      .labelLng('lon')
-      .labelText(() => '')
-      .labelColor(pointColor)
-      .labelDotRadius(pointRadius)
-      .labelAltitude(0.008)
-      .labelsTransitionDuration(0)
-      .labelLabel((q) => `<div class="globe-tooltip">${quakeCardHtml(q)}</div>`)
-      .onLabelClick((q) => showQuakeCard(q));
+
+    buildBorderLines();
   }
 
   // Political borders — countries AND admin-1 states/provinces — as native GL
-  // vector lines. A texture bake was tried first but blurs/fattens on deep
-  // zoom (texture magnification, inherent); GL lines keep a constant ~1px
-  // on-screen width at every zoom. Perf stays flat because each set is ONE
-  // merged THREE.LineSegments (two draw calls total) — never one mesh per
-  // feature. GL ignores lineWidth > 1, so the country > province hierarchy
-  // comes from opacity. The globe mesh is static in globe.gl (the camera
-  // orbits), so scene-space objects stay glued to the surface. Each data set
-  // fails independently; if THREE itself cannot load, lines are skipped.
-  (function buildBorderLines() {
-    const fetchJson = (url) =>
-      fetch(url).then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  // vector lines over the existing globe texture. Ported from the sismos
+  // reference: each set is ONE merged THREE.LineSegments (two draw calls
+  // total); GL ignores lineWidth > 1, so the country > province hierarchy
+  // comes from opacity. Altitudes sit above the surface but below the event
+  // dots. Each data set fails independently; if THREE cannot load, lines are
+  // simply skipped.
+  function buildBorderLines() {
+    var fetchJson = function (url) {
+      return fetch(url).then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();
       });
+    };
 
     Promise.all([
-      // Dynamic import instead of a <script type=module> global: no load-order
-      // race, and a failed CDN load rejects right here into the catch below.
       // Pinned near globe.gl@2's bundled three so cross-instance objects
-      // (BufferGeometry/LineSegments, whose structure is stable) remain
-      // compatible with globe.gl's renderer.
+      // (BufferGeometry/LineSegments) remain compatible with its renderer.
       import('https://unpkg.com/three@0.180.0/build/three.module.js'),
       Promise.allSettled([
         fetchJson('admin1-lines.json'),
         fetchJson('https://unpkg.com/world-atlas@2.0.2/countries-110m.json')
       ])
     ])
-      .then(([THREE, [admin1Res, countriesRes]]) => {
-        const u = window.BorderUtils;
+      .then(function (loaded) {
+        var THREE = loaded[0];
+        var admin1Res = loaded[1][0];
+        var countriesRes = loaded[1][1];
+        var u = window.BorderUtils;
         if (!u || !window.topojson) throw new Error('border helpers unavailable');
 
-        // MultiLineString coordinates per set; a failed fetch just skips its set.
-        const admin1Lines =
+        // MultiLineString coordinates per set; a failed fetch skips its set.
+        var admin1Lines =
           admin1Res.status === 'fulfilled'
             ? window.topojson.feature(admin1Res.value, admin1Res.value.objects.admin1)
                 .features[0].geometry.coordinates
             : null;
         // mesh() dedupes shared borders into a single MultiLineString.
-        const countryLines =
+        var countryLines =
           countriesRes.status === 'fulfilled'
             ? window.topojson.mesh(countriesRes.value, countriesRes.value.objects.countries)
                 .coordinates
@@ -398,253 +187,254 @@
         if (admin1Res.status === 'rejected') console.warn('Admin-1 boundaries unavailable:', admin1Res.reason);
         if (countriesRes.status === 'rejected') console.warn('Country borders unavailable:', countriesRes.reason);
 
-        // One merged LineSegments per set: every polyline expands into
-        // independent segment pairs sharing a single position buffer.
-        // Altitudes sit above the surface but below the quake dots (0.008);
-        // globe.getCoords does the lat/lon/alt -> scene xyz conversion.
-        const addLineSet = (lines, altitude, opacity) => {
-          const positions = [];
-          for (const line of lines) {
-            const vertices = line.map(([lon, lat]) => {
-              const { x, y, z } = globe.getCoords(lat, lon, altitude);
-              return [x, y, z];
+        var addLineSet = function (lines, altitude, opacity) {
+          var positions = [];
+          lines.forEach(function (line) {
+            var vertices = line.map(function (pt) {
+              var c = globe.getCoords(pt[1], pt[0], altitude);
+              return [c.x, c.y, c.z];
             });
-            for (const v of u.polylineToSegmentPairs(vertices)) {
+            u.polylineToSegmentPairs(vertices).forEach(function (v) {
               positions.push(v[0], v[1], v[2]);
-            }
-          }
-          const geometry = new THREE.BufferGeometry();
+            });
+          });
+          var geometry = new THREE.BufferGeometry();
           geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-          const material = new THREE.LineBasicMaterial({
+          var material = new THREE.LineBasicMaterial({
             color: 0xbecde1,
             transparent: true,
-            opacity
+            opacity: opacity
           });
           globe.scene().add(new THREE.LineSegments(geometry, material));
           return positions.length / 3;
         };
 
-        const admin1Vertices = admin1Lines ? addLineSet(admin1Lines, 0.002, 0.3) : 0;
-        const countryVertices = countryLines ? addLineSet(countryLines, 0.003, 0.75) : 0;
+        var admin1Vertices = admin1Lines ? addLineSet(admin1Lines, 0.002, 0.3) : 0;
+        var countryVertices = countryLines ? addLineSet(countryLines, 0.003, 0.75) : 0;
         // In-page instrumentation so border construction can be verified.
-        window.__bordersDebug = { admin1Vertices, countryVertices };
+        window.__bordersDebug = { admin1Vertices: admin1Vertices, countryVertices: countryVertices };
       })
-      .catch((err) => {
+      .catch(function (err) {
         console.warn('Vector borders unavailable:', err);
       });
-  })();
-
-  globe.controls().autoRotate = true;
-  globe.controls().autoRotateSpeed = 0.6;
-  el.globe.addEventListener('pointerdown', () => {
-    globe.controls().autoRotate = false;
-  }, { once: true });
-
-  function sizeGlobe() {
-    globe.width(window.innerWidth).height(window.innerHeight);
   }
-  window.addEventListener('resize', sizeGlobe);
-  sizeGlobe();
 
-  // Re-size points on zoom. onZoom also fires while rotating, so only rebuild
-  // the (debounced) layer when the altitude-derived scale actually changes.
-  let zoomTimer;
-  globe.onZoom(({ altitude }) => {
-    const next = Math.min(1, Math.max(0.12, altitude / 2.5));
-    if (Math.abs(next - zoomScale) / zoomScale < 0.08) return;
-    zoomScale = next;
-    clearTimeout(zoomTimer);
-    zoomTimer = setTimeout(() => {
-      if (isTouch) {
-        globe.pointRadius((q) => pointRadius(q));
-        globe.pointAltitude(() => 0.0015 * zoomScale);
-      } else {
-        globe.labelDotRadius((q) => pointRadius(q));
+  function hexToRgb(hex) {
+    return parseInt(hex.slice(1, 3), 16) + ',' + parseInt(hex.slice(3, 5), 16) + ',' +
+      parseInt(hex.slice(5, 7), 16);
+  }
+
+  function colorFor(evento) {
+    var base = TIER_COLORS[evento.tier] || '#9aa7bb';
+    // Fade with the engine's decay curve: fresh = opaque, old = dim.
+    var w = 0.25 + 0.75 * decayWeight(ageHours(evento));
+    var r = parseInt(base.slice(1, 3), 16);
+    var g = parseInt(base.slice(3, 5), 16);
+    var b = parseInt(base.slice(5, 7), 16);
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + w.toFixed(2) + ')';
+  }
+
+  // ---------- Rendering ----------
+
+  function titleOf(e) { return I18n.localizeTitle(e, LANG); }
+
+  function visibleEvents() {
+    var minMag = Number(els.magSlider.value);
+    var kind = els.kindSelect.value;
+    var hours = Number(els.windowSelect.value);
+    var continent = els.continentSelect.value;
+    var text = els.placeInput.value.trim().toLowerCase();
+    var alertsOnly = els.alertToggle.checked;
+    var minTime = Date.now() - hours * 3600000;
+
+    return allEvents.filter(function (e) {
+      if (e.magnitude < minMag) return false;
+      if (kind && e.kind !== kind) return false;
+      if (Date.parse(e.updated || e.time) < minTime) return false;
+      if (continent && e.continent !== continent) return false;
+      if (alertsOnly && e.alert !== 'orange' && e.alert !== 'red') return false;
+      if (text) {
+        var hay = (e.title + ' ' + titleOf(e) + ' ' + (e.country || '') + ' ' +
+          I18n.kindName(e.kind, LANG)).toLowerCase();
+        if (hay.indexOf(text) === -1) return false;
       }
-    }, lowPower ? 150 : 60);
-  });
-
-  // Cap the device pixel ratio: retina phones otherwise render ~4x the pixels
-  // the eye can resolve at handset size — the single biggest cost on old GPUs.
-  globe.renderer().setPixelRatio(Math.min(window.devicePixelRatio || 1, lowPower ? 1.25 : 2));
-
-  // Don't burn GPU/battery while the tab is in the background.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) globe.pauseAnimation();
-    else globe.resumeAnimation();
-  });
-
-  // ---------- Filtering & rendering ----------
-
-  function matchesFilters(q, { applyWindow = true } = {}) {
-    const f = state.filters;
-    if (q.magnitude < f.minMag) return false;
-    if (applyWindow) {
-      const age = Date.now() - Date.parse(q.time);
-      if (age > f.windowHours * 3600 * 1000) return false;
-    }
-    if (f.continent && q.continent !== f.continent) return false;
-    if (f.text) {
-      const hay = `${q.place || ''} ${q.country || ''}`.toLowerCase();
-      if (!hay.includes(f.text)) return false;
-    }
-    return true;
+      return true;
+    });
   }
+
+  var RECENT_RING_MS = 3600 * 1000; // activity within the last hour ripples
 
   function render() {
-    const visible = state.quakes.filter((q) => matchesFilters(q));
-
-    // Damaging quakes: year-wide layer, so the recency filter does not apply.
-    let damagingVisible = [];
-    if (state.filters.showDamaging) {
-      damagingVisible = state.damaging.filter((q) => matchesFilters(q, { applyWindow: false }));
-    }
-    const damagingIds = new Set(damagingVisible.map((q) => q.id));
-    const base = visible.filter((q) => !damagingIds.has(q.id));
-
-    renderedMarkers = [...base, ...damagingVisible];
-    if (isTouch) {
-      globe.pointsData(renderedMarkers);
-    } else {
-      globe.labelsData(renderedMarkers);
-    }
-
-    // Propagating rings drawn on the sphere itself (exact position at any
-    // zoom): last-hour quakes colored by magnitude, damaging quakes magenta.
-    const lastHour = base.filter((q) => Date.now() - Date.parse(q.time) <= RECENT_MS);
-    globe.ringsData([
-      ...lastHour.map((q) => ({ lat: q.lat, lon: q.lon, mag: q.magnitude, rgb: magRgb(q.magnitude, false) })),
-      ...damagingVisible.map((q) => ({ lat: q.lat, lon: q.lon, mag: q.magnitude, rgb: COLORS.magenta }))
-    ]);
-
-    const total = state.quakes.length + (state.filters.showDamaging ? state.damaging.length : 0);
-    const shown = base.length + damagingVisible.length;
-    el.counter.innerHTML = `<strong>${shown}</strong> sismos visibles / ${total} totales`;
+    var events = visibleEvents();
+    var now = Date.now();
+    globe.pointsData(events);
+    // Any kind ripples on fresh ACTIVITY: quakes by origin time, ongoing
+    // events (fires, floods, cyclones) by their latest agency update —
+    // start dates alone would leave everything but quakes silent.
+    globe.ringsData(events.filter(function (e) {
+      return e.alert === 'red' || now - Date.parse(e.updated || e.time) <= RECENT_RING_MS;
+    }));
+    els.counter.textContent = events.length + ' ' + I18n.t('events', LANG);
+    renderToast(events);
   }
 
-  // ---------- Data loading ----------
-
-  async function fetchJson(url) {
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+  function renderToast(events) {
+    if (!events.length) { els.toast.classList.add('hidden'); return; }
+    var top = events.reduce(function (a, b) { return b.magnitude > a.magnitude ? b : a; });
+    els.toast.textContent = '⬤ ' + I18n.t('topEvent', LANG) + ': ' + titleOf(top) +
+      ' (' + top.magnitude.toFixed(1) + ')';
+    els.toast.classList.remove('hidden');
+    els.toast.onclick = function () { flyTo(top); };
   }
 
-  // ---------- New-quake detection (near-real-time) ----------
+  function flyTo(e) {
+    globe.pointOfView({ lat: e.lat, lng: e.lon, altitude: 1.4 }, 900);
+    showCard(e);
+  }
 
-  const knownIds = new Set();
-  let toastTimer;
-
-  function notifyNewQuakes(fresh) {
-    const strongest = fresh.reduce((a, b) => (b.magnitude > a.magnitude ? b : a));
-    el.toast.innerHTML = fresh.length === 1
-      ? `⚡ Nuevo sismo: <b>M ${strongest.magnitude.toFixed(1)}</b> · ${escapeHtml(strongest.place || '')}`
-      : `⚡ <b>${fresh.length}</b> sismos nuevos · mayor: M ${strongest.magnitude.toFixed(1)}`;
-    el.toast.classList.remove('hidden');
-    el.toast.onclick = () => {
-      globe.pointOfView({ lat: strongest.lat, lng: strongest.lon, altitude: 1.6 }, 1200);
-      showQuakeCard(strongest);
-      el.toast.classList.add('hidden');
+  // New-event alerts, like the old sismos toast but for arrivals: after every
+  // refresh, events whose id was never seen before announce themselves with
+  // their magnitude. Click flies to the strongest newcomer.
+  function announceNew(newcomers) {
+    if (!newcomers.length) return;
+    var top = newcomers.reduce(function (a, b) { return b.magnitude > a.magnitude ? b : a; });
+    var label = newcomers.length === 1
+      ? I18n.t('newEvent', LANG) + ': ' + titleOf(top) + ' (' + I18n.t('magnitude', LANG) + ' ' + top.magnitude.toFixed(1) + ')'
+      : newcomers.length + ' ' + I18n.t('newEvents', LANG) + ' · ' + titleOf(top) + ' (' + top.magnitude.toFixed(1) + ')';
+    els.alertToast.textContent = '🔔 ' + label;
+    els.alertToast.classList.remove('hidden');
+    els.alertToast.onclick = function () {
+      els.alertToast.classList.add('hidden');
+      flyTo(top);
     };
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.toast.classList.add('hidden'), 15000);
+    if (alertTimer) clearTimeout(alertTimer);
+    alertTimer = setTimeout(function () {
+      els.alertToast.classList.add('hidden');
+    }, ALERT_HIDE_MS);
   }
 
-  async function loadQuakes({ initial = false } = {}) {
-    el.refreshBtn.disabled = true;
-    if (initial) el.loading.classList.remove('hidden');
-    try {
-      const data = await fetchJson('/api/quakes');
-      state.quakes = data.quakes || [];
-      state.updatedAt = Date.now();
-      el.errorBox.classList.add('hidden');
+  function tooltipHtml(e) {
+    return '<div style="font:12px system-ui;padding:6px 9px;background:rgba(10,16,28,.92);' +
+      'border:1px solid rgba(120,150,200,.3);border-radius:8px;max-width:260px">' +
+      '<b>' + escapeHtml(titleOf(e)) + '</b><br/>' +
+      I18n.kindName(e.kind, LANG) + ' · ' + I18n.tierName(e.tier, LANG) + ' · M ' + e.magnitude.toFixed(1) +
+      (e.nearData ? '<br/>' + escapeHtml(I18n.nearLabel(e.nearData, LANG)) : '') +
+      '</div>';
+  }
 
-      const fresh = state.quakes.filter((q) => !knownIds.has(q.id));
-      const firstLoad = knownIds.size === 0;
-      state.quakes.forEach((q) => knownIds.add(q.id));
-      if (!firstLoad && fresh.length > 0) notifyNewQuakes(fresh);
-
-      render();
-      renderUpdated();
-    } catch (err) {
-      console.error('Failed to load quakes:', err);
-      if (state.quakes.length === 0) {
-        el.errorBox.classList.remove('hidden');
-      }
-    } finally {
-      el.loading.classList.add('hidden');
-      el.refreshBtn.disabled = false;
+  function showCard(e) {
+    var rows = [];
+    rows.push('<div><strong>' + I18n.kindName(e.kind, LANG) + '</strong> · ' +
+      I18n.t('magnitude', LANG) + ' <strong>' + e.magnitude.toFixed(1) + '</strong> ' +
+      I18n.t('unifiedScale', LANG) + '</div>');
+    if (e.severity && e.severity.text) {
+      rows.push('<div>' + I18n.t('signal', LANG) + ': <strong>' + escapeHtml(e.severity.text) + '</strong></div>');
     }
-  }
-
-  async function loadDamaging() {
-    try {
-      const data = await fetchJson('/api/damaging');
-      state.damaging = (data.quakes || []).map((q) => ({ ...q, damaging: true }));
-      state.damagingLoaded = true;
-      render();
-    } catch (err) {
-      console.error('Failed to load damaging quakes:', err);
+    if (e.nearData) {
+      rows.push('<div>' + I18n.t('near', LANG) + ': <strong>' +
+        escapeHtml(I18n.nearLabel(e.nearData, LANG)) + '</strong></div>');
     }
-  }
-
-  function renderUpdated() {
-    if (!state.updatedAt) return;
-    const min = Math.round((Date.now() - state.updatedAt) / 60000);
-    el.updated.textContent = min < 1 ? 'Actualizado hace instantes' : `Actualizado hace ${min} min`;
-  }
-
-  // ---------- Events ----------
-
-  el.magSlider.addEventListener('input', () => {
-    state.filters.minMag = Number(el.magSlider.value);
-    el.magValue.textContent = state.filters.minMag.toFixed(1);
-    render();
-  });
-
-  el.windowSelect.addEventListener('change', () => {
-    state.filters.windowHours = Number(el.windowSelect.value);
-    render();
-  });
-
-  el.continentSelect.addEventListener('change', () => {
-    state.filters.continent = el.continentSelect.value;
-    render();
-  });
-
-  let textDebounce;
-  el.placeInput.addEventListener('input', () => {
-    clearTimeout(textDebounce);
-    textDebounce = setTimeout(() => {
-      state.filters.text = el.placeInput.value.trim().toLowerCase();
-      render();
-    }, 200);
-  });
-
-  el.damagingToggle.addEventListener('change', () => {
-    state.filters.showDamaging = el.damagingToggle.checked;
-    if (state.filters.showDamaging && !state.damagingLoaded) {
-      loadDamaging();
+    var countryDisplay = e.cc ? I18n.countryName(e.cc, LANG) : e.country;
+    if (countryDisplay) {
+      rows.push('<div>' + I18n.t('country', LANG) + ': <strong>' + escapeHtml(countryDisplay) + '</strong></div>');
     }
-    render();
-  });
+    if (e.continent) {
+      rows.push('<div>' + I18n.t('continentRow', LANG) + ': ' + I18n.continentName(e.continent, LANG) + '</div>');
+    }
+    // Dates render in the viewer's own clock (computer/phone timezone).
+    rows.push('<div>' + I18n.t('start', LANG) + ': ' +
+      I18n.formatDateTime(e.time, LANG, { timeZoneName: true }) + '</div>');
+    if (e.updated && e.updated !== e.time) {
+      rows.push('<div>' + I18n.t('updatedRow', LANG) + ': ' + I18n.formatDateTime(e.updated, LANG) + '</div>');
+    }
 
-  el.refreshBtn.addEventListener('click', () => {
-    loadQuakes();
-    if (state.filters.showDamaging) loadDamaging();
-  });
-  el.retryBtn.addEventListener('click', () => loadQuakes({ initial: true }));
+    var badges = ['<span class="badge badge-' + e.tier + '">' + I18n.tierName(e.tier, LANG) + '</span>'];
+    if (e.alert) {
+      badges.push('<span class="badge badge-alert-' + e.alert + '">' + I18n.alertLabel(e.alert, LANG) + '</span>');
+    }
+    badges.push('<span class="badge badge-source">' + (SOURCE_LABELS[e.source] || e.source) + '</span>');
 
-  el.panelToggle.addEventListener('click', () => {
-    el.panel.classList.toggle('open');
-  });
+    els.card.innerHTML =
+      '<button class="ec-close" aria-label="Cerrar">×</button>' +
+      '<h3 class="ec-title">' + escapeHtml(titleOf(e)) + '</h3>' +
+      '<div class="ec-badges">' + badges.join('') + '</div>' +
+      '<div class="ec-rows">' + rows.join('') + '</div>' +
+      (e.url ? '<a class="ec-link" href="' + encodeURI(e.url) + '" target="_blank" rel="noopener noreferrer">' +
+        I18n.t('report', LANG) + ' ↗</a>' : '');
+    els.card.classList.remove('hidden');
+    els.card.querySelector('.ec-close').onclick = function () {
+      els.card.classList.add('hidden');
+    };
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function populateKinds() {
+    var kinds = {};
+    allEvents.forEach(function (e) { kinds[e.kind] = true; });
+    var current = els.kindSelect.value;
+    els.kindSelect.innerHTML = '<option value="">' + I18n.t('all', LANG) + '</option>' +
+      Object.keys(kinds).sort(function (a, b) {
+        return I18n.kindName(a, LANG).localeCompare(I18n.kindName(b, LANG), LANG);
+      }).map(function (k) {
+        return '<option value="' + k + '">' + I18n.kindName(k, LANG) + '</option>';
+      }).join('');
+    els.kindSelect.value = kinds[current] ? current : '';
+  }
+
+  // ---------- Data ----------
+
+  function load() {
+    els.errorBox.classList.add('hidden');
+    lastLoadAt = Date.now();
+    fetch(API_URL)
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        allEvents = data.events || [];
+        // Announce arrivals only after the baseline load, so the first
+        // payload does not fire a thousand alerts.
+        if (knownIds) {
+          var newcomers = allEvents.filter(function (e) { return !knownIds.has(e.id); });
+          if (newcomers.length) announceNew(newcomers);
+        }
+        knownIds = new Set(allEvents.map(function (e) { return e.id; }));
+
+        populateKinds();
+        els.updated.textContent = I18n.t('updated', LANG) + ' ' +
+          I18n.formatDateTime(data.updatedAt, LANG) + (data.stale ? ' ' + I18n.t('cached', LANG) : '');
+        if (data.sourceCounts) {
+          els.sourcesNote.textContent = Object.keys(data.sourceCounts).map(function (s) {
+            return (SOURCE_LABELS[s] || s) + ': ' + data.sourceCounts[s];
+          }).join(' · ') + ' — ' + I18n.t('merged', LANG);
+        }
+        els.loading.classList.add('hidden');
+        render();
+      })
+      .catch(function () {
+        els.loading.classList.add('hidden');
+        if (!allEvents.length) els.errorBox.classList.remove('hidden');
+      });
+  }
+
+  function scheduleRefresh() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(load, REFRESH_MS);
+  }
 
   // ---------- Mochila de Emergencia lead form ----------
-  // Our own modal; /api/mochila validates and forwards to a Google Form
-  // server-side, so the destination is never exposed to the visitor.
+  // Ported from the sismos reference: our own modal; /api/mochila validates
+  // and forwards to a Google Form server-side, so the destination is never
+  // exposed to the visitor.
 
   // Client-side mirror of the server rules (lib/mochila.js is authoritative).
-  const MOCHILA_MESSAGES = {
+  var MOCHILA_MESSAGES = {
     required: 'Este campo es obligatorio.',
     invalid_email: 'Ingresá un email válido.',
     invalid_phone: 'Ingresá un teléfono válido (al menos 6 dígitos).'
@@ -658,9 +448,9 @@
   }
 
   function setFieldError(input, code) {
-    const field = input.closest('.field');
+    var field = input.closest('.field');
     if (!field) return;
-    const msg = field.querySelector('.field-error');
+    var msg = field.querySelector('.field-error');
     if (code) {
       field.classList.add('invalid');
       msg.textContent = MOCHILA_MESSAGES[code] || 'Revisá este campo.';
@@ -672,219 +462,146 @@
     }
   }
 
-  function openMochila() {
-    el.mochilaForm.classList.remove('hidden');
-    el.mochilaSuccess.classList.add('hidden');
-    el.mochilaError.classList.add('hidden');
-    el.mochilaModal.classList.remove('hidden');
-    const first = el.mochilaForm.querySelector('input[name="nombre"]');
-    if (first) first.focus();
-  }
+  function wireMochila() {
+    var modal = $('mochilaModal');
+    var form = $('mochilaForm');
+    var successBox = $('mochilaSuccess');
+    var errorBox = $('mochilaError');
+    var submitBtn = $('mochilaSubmit');
 
-  function closeMochila() {
-    el.mochilaModal.classList.add('hidden');
-  }
+    function openMochila() {
+      form.classList.remove('hidden');
+      successBox.classList.add('hidden');
+      errorBox.classList.add('hidden');
+      modal.classList.remove('hidden');
+      var first = form.querySelector('input[name="nombre"]');
+      if (first) first.focus();
+    }
 
-  el.mochilaBtn.addEventListener('click', openMochila);
-  el.mochilaClose.addEventListener('click', closeMochila);
-  $('mochilaCancel').addEventListener('click', closeMochila);
+    function closeMochila() { modal.classList.add('hidden'); }
 
-  // Reference infographic: src is only set the first time the visitor asks
-  // for it — form-only visits never download the image.
-  const infoToggle = $('mochilaInfoToggle');
-  const infoImg = $('mochilaInfoImg');
-  if (infoToggle && infoImg) {
-    infoToggle.addEventListener('click', () => {
+    $('mochilaBtn').addEventListener('click', openMochila);
+    $('mochilaClose').addEventListener('click', closeMochila);
+    $('mochilaCancel').addEventListener('click', closeMochila);
+
+    // Reference infographic: src is only set the first time the visitor asks
+    // for it — form-only visits never download the image.
+    var infoToggle = $('mochilaInfoToggle');
+    var infoImg = $('mochilaInfoImg');
+    infoToggle.addEventListener('click', function () {
       if (!infoImg.getAttribute('src')) infoImg.src = 'mochila.jpg';
-      const nowHidden = infoImg.classList.toggle('hidden');
+      var nowHidden = infoImg.classList.toggle('hidden');
       infoToggle.textContent = nowHidden ? 'Ver qué incluye la mochila ▾' : 'Ocultar el contenido ▴';
     });
-  }
-  el.mochilaModal.addEventListener('click', (e) => {
-    if (e.target.hasAttribute('data-close')) closeMochila();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !el.mochilaModal.classList.contains('hidden')) closeMochila();
-  });
 
-  el.mochilaForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    el.mochilaError.classList.add('hidden');
+    modal.addEventListener('click', function (e) {
+      if (e.target.hasAttribute('data-close')) closeMochila();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !modal.classList.contains('hidden')) closeMochila();
+    });
 
-    const payload = {};
-    let firstInvalid = null;
-    for (const control of el.mochilaForm.querySelectorAll('input[name], select[name]')) {
-      const name = control.name;
-      if (name === 'website') {
-        // Honeypot: mobile autofill fills hidden "website" fields despite
-        // autocomplete="off", which made the server silently drop REAL
-        // submissions. Humans always go through this code path, so always
-        // send it empty; only bots POSTing the scraped form directly trip it.
-        payload[name] = '';
-        continue;
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      errorBox.classList.add('hidden');
+
+      var payload = {};
+      var firstInvalid = null;
+      form.querySelectorAll('input[name]').forEach(function (control) {
+        var name = control.name;
+        if (name === 'website') {
+          // Honeypot: mobile autofill fills hidden "website" fields despite
+          // autocomplete="off", which once made the server silently drop REAL
+          // submissions. Humans always go through this code path, so always
+          // send it empty; only bots POSTing the scraped form trip it.
+          payload[name] = '';
+          return;
+        }
+        var value = control.value.trim();
+        payload[name] = value;
+        var code = mochilaFieldError(name, value);
+        setFieldError(control, code);
+        if (code && !firstInvalid) firstInvalid = control;
+      });
+      if (firstInvalid) {
+        firstInvalid.focus();
+        return;
       }
-      const value = control.value.trim();
-      payload[name] = value;
-      const code = mochilaFieldError(name, value);
-      setFieldError(control, code);
-      if (code && !firstInvalid) firstInvalid = control;
-    }
-    if (firstInvalid) {
-      firstInvalid.focus();
-      return;
-    }
 
-    el.mochilaSubmit.disabled = true;
-    el.mochilaSubmit.textContent = 'Enviando…';
-    try {
-      const res = await fetch('/api/mochila', {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Enviando…';
+      fetch('/api/mochila', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
-      });
-      const data = await res.json().catch(() => ({}));
-
-      if (res.ok) {
-        el.mochilaForm.classList.add('hidden');
-        el.mochilaSuccess.classList.remove('hidden');
-        el.mochilaForm.reset();
-        setTimeout(closeMochila, 3000);
-      } else if (res.status === 503 && data.error === 'not_configured') {
-        el.mochilaError.textContent = 'El formulario estará disponible muy pronto.';
-        el.mochilaError.classList.remove('hidden');
-      } else if (res.status === 400 && data.field) {
-        const control = el.mochilaForm.querySelector(`[name="${data.field}"]`);
-        if (control) {
-          setFieldError(control, data.error);
-          control.focus();
-        }
-        el.mochilaError.textContent = 'Revisá los datos marcados e intentá de nuevo.';
-        el.mochilaError.classList.remove('hidden');
-      } else {
-        throw new Error(`HTTP ${res.status}`);
-      }
-    } catch (err) {
-      console.warn('Mochila form submit failed:', err);
-      el.mochilaError.textContent = 'No pudimos enviar el formulario. Intentá de nuevo en unos minutos.';
-      el.mochilaError.classList.remove('hidden');
-    } finally {
-      el.mochilaSubmit.disabled = false;
-      el.mochilaSubmit.textContent = 'Enviar';
-    }
-  });
-
-  // Mobile bottom sheet: dragging the handle downward dismisses the panel.
-  // The panel follows the finger; releasing past the threshold closes it,
-  // otherwise it snaps back.
-  const panelHandle = $('panelHandle');
-  if (panelHandle) {
-    // Set imperatively so the gesture never depends on media-query timing.
-    panelHandle.style.touchAction = 'none';
-
-    let dragStartY = null;
-    let lastY = 0;
-    let dragStartTime = 0;
-    let dragEngaged = false; // true once the gesture is claimed as a dismiss
-
-    // Controls keep their own gestures; everything else on the panel drags.
-    const isInteractive = (t) =>
-      Boolean(t.closest && t.closest('input, select, button, a, textarea'));
-
-    const cleanupDrag = () => {
-      dragStartY = null;
-      dragEngaged = false;
-      window.removeEventListener('pointermove', onPanelDragMove);
-      window.removeEventListener('pointerup', onPanelDragEnd);
-      window.removeEventListener('pointercancel', onPanelDragEnd);
-    };
-
-    // Move/up tracked on window: even if pointer capture fails or the browser
-    // hesitates on the first gesture, the drag keeps receiving events.
-    const onPanelDragMove = (e) => {
-      if (dragStartY == null) return;
-      lastY = e.clientY;
-      const dy = e.clientY - dragStartY;
-      if (!dragEngaged) {
-        // Claim the gesture only when pulling DOWN with the sheet scrolled to
-        // its top; otherwise abandon and let native panel scrolling happen.
-        if (dy > 8 && el.panel.scrollTop <= 0) {
-          dragEngaged = true;
-          el.panel.style.transition = 'none';
-        } else if (dy < -8 || el.panel.scrollTop > 0) {
-          cleanupDrag();
-          return;
-        } else {
-          return;
-        }
-      }
-      el.panel.style.transform = `translateY(${Math.max(0, dy)}px)`;
-      e.preventDefault();
-    };
-    const onPanelDragEnd = (e) => {
-      if (dragStartY == null) return;
-      // pointercancel may carry no coordinates — fall back to the last move.
-      const endY = typeof e.clientY === 'number' && e.clientY !== 0 ? e.clientY : lastY;
-      const dy = endY - dragStartY;
-      const velocity = dy / Math.max(1, Date.now() - dragStartTime); // px/ms
-      const engaged = dragEngaged;
-      cleanupDrag();
-      el.panel.style.transition = '';
-      el.panel.style.transform = '';
-      // Distance OR a quick downward flick dismisses.
-      if (engaged && (dy > 50 || (dy > 15 && velocity > 0.5))) {
-        el.panel.classList.remove('open');
-      }
-    };
-
-    const beginPanelDrag = (e, fromHandle) => {
-      dragStartY = e.clientY;
-      lastY = e.clientY;
-      dragStartTime = Date.now();
-      dragEngaged = fromHandle; // the handle claims the gesture immediately
-      if (fromHandle) el.panel.style.transition = 'none';
-      window.addEventListener('pointermove', onPanelDragMove, { passive: false });
-      window.addEventListener('pointerup', onPanelDragEnd);
-      window.addEventListener('pointercancel', onPanelDragEnd);
-    };
-
-    panelHandle.addEventListener('pointerdown', (e) => {
-      try {
-        panelHandle.setPointerCapture(e.pointerId);
-      } catch {
-        // Synthetic events have no active pointer — window listeners cover it.
-      }
-      beginPanelDrag(e, true);
-      // Claim the gesture before the browser decides it is a scroll.
-      e.preventDefault();
+      })
+        .then(function (res) {
+          return res.json().catch(function () { return {}; }).then(function (data) {
+            if (res.ok) {
+              form.classList.add('hidden');
+              successBox.classList.remove('hidden');
+              form.reset();
+              setTimeout(closeMochila, 3000);
+            } else if (res.status === 503 && data.error === 'not_configured') {
+              errorBox.textContent = 'El formulario estará disponible muy pronto.';
+              errorBox.classList.remove('hidden');
+            } else if (res.status === 400 && data.field) {
+              var control = form.querySelector('[name="' + data.field + '"]');
+              if (control) {
+                setFieldError(control, data.error);
+                control.focus();
+              }
+              errorBox.textContent = 'Revisá los datos marcados e intentá de nuevo.';
+              errorBox.classList.remove('hidden');
+            } else {
+              throw new Error('HTTP ' + res.status);
+            }
+          });
+        })
+        .catch(function (err) {
+          console.warn('Mochila form submit failed:', err);
+          errorBox.textContent = 'No pudimos enviar el formulario. Intentá de nuevo en unos minutos.';
+          errorBox.classList.remove('hidden');
+        })
+        .then(function () {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Enviar';
+        });
     });
-
-    // The WHOLE panel is a drag surface: any spot that is not a form control
-    // can start the swipe (it only engages on a downward pull from the top).
-    el.panel.addEventListener('pointerdown', (e) => {
-      if (panelHandle.contains(e.target) || isInteractive(e.target)) return;
-      beginPanelDrag(e, false);
-    });
-
-    // Native scrolling is driven by touch events; once the dismiss gesture is
-    // engaged this non-passive guard stops the panel from scrolling under it.
-    el.panel.addEventListener(
-      'touchmove',
-      (e) => {
-        if (dragEngaged) e.preventDefault();
-      },
-      { passive: false }
-    );
   }
 
-  // ---------- Boot ----------
+  // ---------- Wiring ----------
 
-  loadQuakes({ initial: true });
-  setInterval(() => {
-    loadQuakes();
-    if (state.filters.showDamaging) loadDamaging();
-  }, REFRESH_MS);
-  setInterval(() => {
-    renderUpdated();
-    render(); // keeps recency fading/rings honest over time
-  }, TICK_MS);
+  els.magSlider.addEventListener('input', function () {
+    els.magValue.textContent = Number(els.magSlider.value).toFixed(1);
+    render();
+  });
+  ['change', 'input'].forEach(function (evt) {
+    els.kindSelect.addEventListener(evt, render);
+    els.windowSelect.addEventListener(evt, render);
+    els.continentSelect.addEventListener(evt, render);
+    els.alertToggle.addEventListener(evt, render);
+  });
+  els.placeInput.addEventListener('input', render);
+  els.refreshBtn.addEventListener('click', load);
+  els.retryBtn.addEventListener('click', function () {
+    els.errorBox.classList.add('hidden');
+    els.loading.classList.remove('hidden');
+    load();
+  });
+  els.panelToggle.addEventListener('click', function () {
+    els.panel.classList.toggle('collapsed');
+  });
+  // Coming back to the tab refreshes immediately if the last load is stale,
+  // so the "real time" feel survives phones suspending background tabs.
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && Date.now() - lastLoadAt > 30 * 1000) load();
+  });
+  if (window.innerWidth < 640) els.panel.classList.add('collapsed');
+
+  applyStatic();
+  initGlobe();
+  wireMochila();
+  load();
+  scheduleRefresh();
 })();

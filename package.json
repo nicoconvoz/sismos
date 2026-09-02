@@ -1,9 +1,9 @@
 {
-  "name": "sismos",
+  "name": "perioteca",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "3D globe of worldwide earthquakes from the last 24 hours",
+  "description": "3D globe of ongoing world events, unified by a magnitude engine over multiple stable feeds",
   "scripts": {
     "test": "node --test",
     "dev": "node dev-server.js"

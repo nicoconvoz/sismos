@@ -3,29 +3,26 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { normalizeUsgs, usgsYearQueryUrl } from '../lib/usgs.js';
+import { normalizeUsgs, USGS_ALL_DAY_URL } from '../lib/usgs.js';
+import { TIERS } from '../lib/magnitude.js';
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const feed = JSON.parse(readFileSync(join(fixtures, 'usgs-all-day.json'), 'utf-8'));
 
-test('normalizeUsgs converts the real all_day feed', () => {
-  const quakes = normalizeUsgs(feed);
-  assert.ok(quakes.length > 50, `expected a rich feed, got ${quakes.length}`);
-  assert.ok(quakes.length <= feed.features.length);
-  for (const q of quakes) {
-    assert.equal(q.source, 'usgs');
-    assert.equal(q.exactCoords, true);
-    assert.ok(Number.isFinite(q.lat) && Number.isFinite(q.lon));
-    assert.ok(Number.isFinite(q.magnitude));
-    assert.ok(!Number.isNaN(Date.parse(q.time)));
-  }
-  // Sorted newest first.
-  for (let i = 1; i < quakes.length; i++) {
-    assert.ok(Date.parse(quakes[i - 1].time) >= Date.parse(quakes[i].time));
+test('normalizeUsgs converts the real all_day feed into events', () => {
+  const events = normalizeUsgs(feed);
+  assert.ok(events.length > 50, `expected a rich feed, got ${events.length}`);
+  for (const e of events) {
+    assert.equal(e.source, 'usgs');
+    assert.equal(e.kind, 'earthquake');
+    assert.ok(Number.isFinite(e.lat) && Number.isFinite(e.lon));
+    assert.ok(e.magnitude >= 0 && e.magnitude <= 10);
+    assert.ok(TIERS.includes(e.tier));
+    assert.ok(!Number.isNaN(Date.parse(e.time)));
   }
 });
 
-test('normalizeUsgs maps a synthetic feature exactly', () => {
+test('normalizeUsgs maps a synthetic quake exactly', () => {
   const geojson = {
     features: [
       {
@@ -34,22 +31,40 @@ test('normalizeUsgs maps a synthetic feature exactly', () => {
           mag: 6.1,
           place: '10 km S of Somewhere, Chile',
           time: 1787755694000,
-          url: 'https://earthquake.usgs.gov/earthquakes/eventpage/us123'
+          url: 'https://earthquake.usgs.gov/earthquakes/eventpage/us123',
+          alert: 'orange'
         },
         geometry: { coordinates: [-71.6, -33.0, 45.3] }
       }
     ]
   };
-  const [q] = normalizeUsgs(geojson, { damaging: true });
-  assert.equal(q.id, 'us123');
-  assert.equal(q.magnitude, 6.1);
-  assert.equal(q.lat, -33);
-  assert.equal(q.lon, -71.6);
-  assert.equal(q.depthKm, 45.3);
-  assert.equal(q.time, new Date(1787755694000).toISOString());
-  assert.equal(q.damaging, true);
-  assert.equal(q.country, 'Chile');
-  assert.equal(q.continent, 'América del Sur');
+  const [e] = normalizeUsgs(geojson);
+  assert.equal(e.id, 'usgs-us123');
+  assert.equal(e.kind, 'earthquake');
+  assert.equal(e.magnitude, 6.1);
+  assert.equal(e.tier, 'grande');
+  assert.equal(e.lat, -33);
+  assert.equal(e.lon, -71.6);
+  assert.equal(e.time, new Date(1787755694000).toISOString());
+  assert.equal(e.country, 'Chile');
+  assert.equal(e.continent, 'América del Sur');
+  assert.equal(e.alert, 'orange'); // USGS PAGER alert passes through
+  assert.deepEqual(e.severity, { value: 6.1, unit: 'M', text: 'M 6.1, 45.3 km deep' });
+});
+
+test('normalizeUsgs clamps negative micro-quake magnitudes to 0', () => {
+  const geojson = {
+    features: [
+      {
+        id: 'tiny',
+        properties: { mag: -0.3, place: 'Nevada', time: 1787755694000, url: null },
+        geometry: { coordinates: [-116, 38, 2] }
+      }
+    ]
+  };
+  const [e] = normalizeUsgs(geojson);
+  assert.equal(e.magnitude, 0);
+  assert.equal(e.tier, 'pequeño');
 });
 
 test('normalizeUsgs skips features without magnitude or coordinates', () => {
@@ -60,8 +75,7 @@ test('normalizeUsgs skips features without magnitude or coordinates', () => {
       { id: 'c', properties: { mag: 2, time: 1787755694000 }, geometry: { coordinates: [1, 2, 3] } }
     ]
   };
-  const quakes = normalizeUsgs(geojson);
-  assert.deepEqual(quakes.map((q) => q.id), ['c']);
+  assert.deepEqual(normalizeUsgs(geojson).map((e) => e.id), ['usgs-c']);
 });
 
 test('normalizeUsgs tolerates malformed input', () => {
@@ -69,9 +83,9 @@ test('normalizeUsgs tolerates malformed input', () => {
   assert.deepEqual(normalizeUsgs({}), []);
 });
 
-test('usgsYearQueryUrl builds the FDSN yearly query', () => {
+test('USGS_ALL_DAY_URL points at the official 24h summary feed', () => {
   assert.equal(
-    usgsYearQueryUrl(2026),
-    'https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=2026-01-01&minmagnitude=6&orderby=time'
+    USGS_ALL_DAY_URL,
+    'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson'
   );
 });

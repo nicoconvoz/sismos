@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "sismos-dev",
+      "name": "perioteca",
       "runtimeExecutable": "node",
       "runtimeArgs": ["dev-server.js"],
-      "port": 3210
+      "port": 3000
     }
   ]
 }

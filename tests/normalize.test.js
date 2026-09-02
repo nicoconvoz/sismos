@@ -1,159 +1,200 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  makeQuake,
+  makeEvent,
   inferContinent,
-  extractCountry,
   filterByTimeWindow,
   sortByTimeDesc,
-  dedupeById,
   haversineKm,
-  mergeQuakes,
-  localTimeToUtc
+  mergeEvents,
+  dedupeById
 } from '../lib/normalize.js';
 
-test('makeQuake normalizes types and derives fields', () => {
-  const q = makeQuake({
-    id: 123,
-    time: '2026-08-26T12:00:00Z',
-    magnitude: '5.5',
-    depthKm: '33',
-    place: 'Offshore Valparaiso, Chile',
-    lat: '-33.0',
-    lon: '-71.6',
-    exactCoords: true,
-    source: 'usgs',
-    url: 'https://example.org/q/123'
+const base = {
+  id: 'x1',
+  time: '2026-09-01T12:00:00Z',
+  title: 'Test event',
+  kind: 'wildfire',
+  lat: -33,
+  lon: -71.6,
+  country: 'Chile',
+  source: 'gdacs',
+  url: 'https://example.org/e/x1',
+  magnitude: 4.2
+};
+
+test('makeEvent builds the normalized shape and derives continent + tier', () => {
+  const e = makeEvent(base);
+  assert.equal(e.id, 'x1');
+  assert.equal(e.time, '2026-09-01T12:00:00.000Z');
+  assert.equal(e.updated, e.time); // defaults to time
+  assert.equal(e.kind, 'wildfire');
+  assert.equal(e.magnitude, 4.2);
+  assert.equal(e.tier, 'mediano');
+  assert.equal(e.continent, 'América del Sur');
+  assert.equal(e.country, 'Chile');
+  assert.equal(e.alert, null);
+  assert.equal(e.severity, null);
+});
+
+test('makeEvent clamps magnitude into [0, 10]', () => {
+  assert.equal(makeEvent({ ...base, magnitude: -0.4 }).magnitude, 0);
+  assert.equal(makeEvent({ ...base, magnitude: 12 }).magnitude, 10);
+});
+
+test('makeEvent returns null when mandatory fields are missing or invalid', () => {
+  assert.equal(makeEvent({ ...base, id: null }), null);
+  assert.equal(makeEvent({ ...base, time: 'not-a-date' }), null);
+  assert.equal(makeEvent({ ...base, lat: null }), null);
+  assert.equal(makeEvent({ ...base, lon: '' }), null);
+  assert.equal(makeEvent({ ...base, magnitude: null }), null);
+  assert.equal(makeEvent({ ...base, kind: '' }), null);
+});
+
+test('makeEvent normalizes alert to lowercase and keeps severity as given', () => {
+  const e = makeEvent({
+    ...base,
+    alert: 'Red',
+    severity: { value: 5.6, unit: 'M', text: 'Magnitude 5.6M' }
   });
-  assert.equal(q.id, '123');
-  assert.equal(q.time, '2026-08-26T12:00:00.000Z');
-  assert.equal(q.magnitude, 5.5);
-  assert.equal(q.depthKm, 33);
-  assert.equal(q.lat, -33);
-  assert.equal(q.lon, -71.6);
-  assert.equal(q.country, 'Chile');
-  assert.equal(q.continent, 'América del Sur');
-  assert.ok(!('damaging' in q), 'damaging omitted unless provided');
+  assert.equal(e.alert, 'red');
+  assert.deepEqual(e.severity, { value: 5.6, unit: 'M', text: 'Magnitude 5.6M' });
 });
 
-test('makeQuake returns null on missing mandatory fields', () => {
-  assert.equal(makeQuake({ id: 1, time: null, magnitude: 5, lat: 0, lon: 0 }), null);
-  assert.equal(makeQuake({ id: 1, time: '2026-01-01', magnitude: 'x', lat: 0, lon: 0 }), null);
-  assert.equal(makeQuake({ id: 1, time: '2026-01-01', magnitude: 5, lat: 'n/a', lon: 0 }), null);
-  assert.equal(makeQuake({ id: 1, time: 'not-a-date', magnitude: 5, lat: 0, lon: 0 }), null);
+test('inferContinent places well-known coordinates', () => {
+  assert.equal(inferContinent(-33.45, -70.66), 'América del Sur'); // Santiago
+  assert.equal(inferContinent(40.7, -74.0), 'América del Norte'); // New York
+  assert.equal(inferContinent(48.85, 2.35), 'Europa'); // Paris
+  assert.equal(inferContinent(35.68, 139.69), 'Asia'); // Tokyo
+  assert.equal(inferContinent(-33.87, 151.2), 'Oceanía'); // Sydney
+  assert.equal(inferContinent(9.05, 7.49), 'África'); // Abuja
+  assert.equal(inferContinent(-77.8, 166.6), 'Antártida'); // McMurdo
 });
 
-test('inferContinent maps known locations to continents', () => {
-  const cases = [
-    [40.4, -3.7, 'Europa'], // Madrid
-    [64.1, -21.9, 'Europa'], // Reykjavik
-    [35.6, 139.7, 'Asia'], // Tokyo
-    [-8.28, 121.55, 'Asia'], // Flores Sea, Indonesia
-    [28.6, 77.2, 'Asia'], // Delhi
-    [30.0, 31.2, 'África'], // Cairo
-    [-1.3, 36.8, 'África'], // Nairobi
-    [34.0, -118.2, 'América del Norte'], // Los Angeles
-    [19.4, -99.1, 'América del Norte'], // Mexico City
-    [-33.4, -70.6, 'América del Sur'], // Santiago
-    [4.8, -76.2, 'América del Sur'], // Choco, Colombia
-    [-33.8, 151.2, 'Oceanía'], // Sydney
-    [-41.3, 174.8, 'Oceanía'], // Wellington
-    [19.9, -155.5, 'Oceanía'], // Hawaii
-    [-77.8, 166.7, 'Antártida'] // McMurdo
+test('filterByTimeWindow keeps only events inside the window', () => {
+  const now = Date.parse('2026-09-02T00:00:00Z');
+  const mk = (id, iso) => makeEvent({ ...base, id, time: iso });
+  const events = [
+    mk('old', '2026-08-25T00:00:00Z'),
+    mk('recent', '2026-09-01T22:00:00Z'),
+    mk('edge', '2026-09-01T00:00:00Z')
   ];
-  for (const [lat, lon, expected] of cases) {
-    assert.equal(inferContinent(lat, lon), expected, `(${lat}, ${lon})`);
-  }
+  const kept = filterByTimeWindow(events, 24, now);
+  assert.deepEqual(kept.map((e) => e.id).sort(), ['edge', 'recent']);
 });
 
-test('extractCountry takes the last comma-separated token', () => {
-  assert.equal(extractCountry('Flores Sea, 64 km al norte de Ende, Indonesia'), 'Indonesia');
-  assert.equal(extractCountry('Chile'), 'Chile');
-  assert.equal(extractCountry(''), null);
-  assert.equal(extractCountry('Off coast, Chile (mar)'), 'Chile');
+test('sortByTimeDesc sorts newest first without mutating input', () => {
+  const a = makeEvent({ ...base, id: 'a', time: '2026-09-01T01:00:00Z' });
+  const b = makeEvent({ ...base, id: 'b', time: '2026-09-01T02:00:00Z' });
+  const input = [a, b];
+  const sorted = sortByTimeDesc(input);
+  assert.deepEqual(sorted.map((e) => e.id), ['b', 'a']);
+  assert.deepEqual(input.map((e) => e.id), ['a', 'b']);
 });
 
-test('filterByTimeWindow keeps only quakes inside the window', () => {
-  const now = Date.parse('2026-08-26T12:00:00Z');
-  const mk = (iso) => ({ time: iso });
-  const quakes = [
-    mk('2026-08-26T11:30:00Z'), // 30 min ago -> in 1h
-    mk('2026-08-26T09:00:00Z'), // 3 h ago -> in 3h
-    mk('2026-08-26T01:00:00Z'), // 11 h ago -> in 12h
-    mk('2026-08-25T11:00:00Z'), // 25 h ago -> outside 24h
-    mk('invalid')
-  ];
-  assert.equal(filterByTimeWindow(quakes, 1, now).length, 1);
-  assert.equal(filterByTimeWindow(quakes, 3, now).length, 2);
-  assert.equal(filterByTimeWindow(quakes, 12, now).length, 3);
-  assert.equal(filterByTimeWindow(quakes, 24, now).length, 3);
+test('haversineKm measures real-world distances', () => {
+  // Santiago -> Buenos Aires ≈ 1140 km.
+  const d = haversineKm(-33.45, -70.66, -34.6, -58.38);
+  assert.ok(d > 1100 && d < 1180, `got ${d}`);
+  assert.equal(haversineKm(10, 20, 10, 20), 0);
 });
 
-test('haversineKm computes great-circle distances', () => {
-  assert.equal(haversineKm(0, 0, 0, 0), 0);
-  // Madrid -> Barcelona is ~505 km.
-  const d = haversineKm(40.4168, -3.7038, 41.3874, 2.1686);
-  assert.ok(d > 480 && d < 530, `got ${d}`);
+test('mergeEvents drops same-family duplicates close in time and space', () => {
+  const gdacsCyclone = makeEvent({
+    ...base,
+    id: 'gdacs-tc',
+    kind: 'cyclone',
+    lat: 18.3,
+    lon: -130.8,
+    time: '2026-09-01T12:00:00Z',
+    source: 'gdacs'
+  });
+  const eonetStorm = makeEvent({
+    ...base,
+    id: 'eonet-storm',
+    kind: 'storm',
+    lat: 18.6,
+    lon: -130.5,
+    time: '2026-09-01T09:00:00Z',
+    source: 'eonet'
+  });
+  // cyclone and storm belong to the same family -> deduped.
+  const merged = mergeEvents([gdacsCyclone], [eonetStorm]);
+  assert.deepEqual(merged.map((e) => e.id), ['gdacs-tc']);
 });
 
-test('mergeQuakes removes duplicates within 90 s and 100 km', () => {
-  const t = '2026-08-26T12:00:00Z';
-  const primary = [{ id: 'p1', time: t, lat: -20, lon: -70, magnitude: 5 }];
-  const dupExact = { id: 's1', time: t, lat: -20, lon: -70, magnitude: 5.1 };
-  const dupNear = { id: 's2', time: '2026-08-26T12:01:00Z', lat: -20.3, lon: -70.2, magnitude: 4.9 };
-  const merged = mergeQuakes(primary, [dupExact, dupNear]);
-  assert.deepEqual(merged.map((q) => q.id), ['p1']);
+test('mergeEvents keeps different families even when close', () => {
+  const quake = makeEvent({ ...base, id: 'q', kind: 'earthquake' });
+  const fire = makeEvent({ ...base, id: 'f', kind: 'wildfire' });
+  const merged = mergeEvents([quake], [fire]);
+  assert.deepEqual(merged.map((e) => e.id).sort(), ['f', 'q']);
 });
 
-test('mergeQuakes keeps nearby-but-different-time and same-time-far-away quakes', () => {
-  const t = '2026-08-26T12:00:00Z';
-  const primary = [{ id: 'p1', time: t, lat: -20, lon: -70, magnitude: 5 }];
-  const sameSpotLater = { id: 's1', time: '2026-08-26T12:10:00Z', lat: -20, lon: -70, magnitude: 4 };
-  const sameTimeFar = { id: 's2', time: t, lat: 35, lon: 139, magnitude: 4 };
-  const merged = mergeQuakes(primary, [sameSpotLater, sameTimeFar]);
-  assert.deepEqual(merged.map((q) => q.id).sort(), ['p1', 's1', 's2']);
+test('mergeEvents keeps same-family events far apart or distant in time', () => {
+  const a = makeEvent({ ...base, id: 'a', kind: 'wildfire', lat: -33, lon: -71 });
+  const far = makeEvent({ ...base, id: 'far', kind: 'wildfire', lat: -20, lon: -60 });
+  const later = makeEvent({
+    ...base,
+    id: 'later',
+    kind: 'wildfire',
+    lat: -33.1,
+    lon: -71.1,
+    time: '2026-09-08T12:00:00Z'
+  });
+  const merged = mergeEvents([a], [far, later]);
+  assert.deepEqual(merged.map((e) => e.id).sort(), ['a', 'far', 'later']);
 });
 
-test('mergeQuakes accepts a custom time tolerance for cross-agency merges', () => {
-  const primary = [{ id: 'local', time: '2026-08-27T12:00:00Z', lat: -33, lon: -70, magnitude: 4 }];
-  // 110 s apart, 30 km away: duplicate only with the widened 120 s window.
-  const secondary = [{ id: 'global', time: '2026-08-27T12:01:50Z', lat: -33.2, lon: -70.2, magnitude: 4.1 }];
-  assert.deepEqual(mergeQuakes(primary, secondary).map((q) => q.id), ['local', 'global']);
+test('mergeEvents dedupes named storms by name across any time gap', () => {
+  // GDACS dates a cyclone at its START; NHC at its latest advisory — the
+  // same storm can differ by days and hundreds of km between agencies, but
+  // both carry its proper name.
+  const gdacs = makeEvent({
+    ...base,
+    id: 'gdacs-TC-1',
+    kind: 'cyclone',
+    lat: 15,
+    lon: -120,
+    time: '2026-08-28T00:00:00Z'
+  });
+  gdacs.eventName = 'KARINA-26';
+  const nhc = makeEvent({
+    ...base,
+    id: 'nhc-ep1',
+    kind: 'cyclone',
+    lat: 19,
+    lon: -131,
+    time: '2026-09-02T03:00:00Z'
+  });
+  nhc.eventName = 'Karina';
+  const other = makeEvent({
+    ...base,
+    id: 'nhc-ep2',
+    kind: 'cyclone',
+    lat: 14,
+    lon: -115,
+    time: '2026-09-02T03:00:00Z'
+  });
+  other.eventName = 'Lowell';
+  const merged = mergeEvents([gdacs], [nhc, other]);
+  assert.deepEqual(merged.map((e) => e.id).sort(), ['gdacs-TC-1', 'nhc-ep2']);
+});
+
+test('mergeEvents honors a custom time window (tight EQ dedupe)', () => {
+  const a = makeEvent({ ...base, id: 'a', kind: 'earthquake', time: '2026-09-01T12:00:00Z' });
+  const b = makeEvent({ ...base, id: 'b', kind: 'earthquake', time: '2026-09-01T12:01:00Z' });
+  // Within 90 s -> duplicate; with a 30 s window -> distinct.
+  assert.deepEqual(mergeEvents([a], [b], { maxDtMs: 90e3 }).map((e) => e.id), ['a']);
   assert.deepEqual(
-    mergeQuakes(primary, secondary, { maxDtMs: 120000 }).map((q) => q.id),
-    ['local']
+    mergeEvents([a], [b], { maxDtMs: 30e3 }).map((e) => e.id).sort(),
+    ['a', 'b']
   );
 });
 
-test('localTimeToUtc converts zone-local wall time to UTC across DST', () => {
-  // Argentina: fixed UTC-3, no DST.
-  assert.equal(
-    localTimeToUtc({ year: 2026, month: 8, day: 27, hour: 9, minute: 38, second: 0 }, 'America/Argentina/Buenos_Aires').toISOString(),
-    '2026-08-27T12:38:00.000Z'
-  );
-  // Chile winter: UTC-4 (verified against the official CSN informe UTC time).
-  assert.equal(
-    localTimeToUtc({ year: 2026, month: 8, day: 27, hour: 8, minute: 59, second: 15 }, 'America/Santiago').toISOString(),
-    '2026-08-27T12:59:15.000Z'
-  );
-  // Chile summer (DST): UTC-3.
-  assert.equal(
-    localTimeToUtc({ year: 2026, month: 1, day: 15, hour: 8, minute: 0, second: 0 }, 'America/Santiago').toISOString(),
-    '2026-01-15T11:00:00.000Z'
-  );
-});
-
-test('mergeQuakes handles empty lists', () => {
-  const a = [{ id: 'a', time: '2026-08-26T12:00:00Z', lat: 0, lon: 0, magnitude: 1 }];
-  assert.deepEqual(mergeQuakes([], []), []);
-  assert.deepEqual(mergeQuakes(a, []).map((q) => q.id), ['a']);
-  assert.deepEqual(mergeQuakes([], a).map((q) => q.id), ['a']);
-});
-
-test('sortByTimeDesc and dedupeById helpers', () => {
-  const a = { id: 'a', time: '2026-08-26T01:00:00Z' };
-  const b = { id: 'b', time: '2026-08-26T02:00:00Z' };
-  const sorted = sortByTimeDesc([a, b]);
-  assert.deepEqual(sorted.map((q) => q.id), ['b', 'a']);
-  assert.deepEqual(dedupeById([a, a, b]).map((q) => q.id), ['a', 'b']);
+test('dedupeById keeps the first occurrence', () => {
+  const a = makeEvent({ ...base, id: 'dup', source: 'gdacs' });
+  const b = makeEvent({ ...base, id: 'dup', source: 'eonet' });
+  const out = dedupeById([a, b]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].source, 'gdacs');
 });

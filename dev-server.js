@@ -6,9 +6,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import quakesHandler from './api/quakes.js';
-import damagingHandler from './api/damaging.js';
-import geocodeHandler from './api/geocode.js';
+import eventsHandler from './api/events.js';
 import mochilaHandler from './api/mochila.js';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
@@ -26,9 +24,7 @@ const MIME = {
 };
 
 const API_ROUTES = {
-  '/api/quakes': quakesHandler,
-  '/api/damaging': damagingHandler,
-  '/api/geocode': geocodeHandler,
+  '/api/events': eventsHandler,
   '/api/mochila': mochilaHandler
 };
 
@@ -78,6 +74,9 @@ const server = http.createServer(async (req, res) => {
   try {
     const data = await readFile(filePath);
     res.setHeader('Content-Type', MIME[extname(filePath).toLowerCase()] || 'application/octet-stream');
+    // Dev only: without this the browser heuristically caches app.js/styles
+    // and serves stale frontend code across server restarts.
+    res.setHeader('Cache-Control', 'no-store');
     res.end(data);
   } catch {
     res.statusCode = 404;
@@ -87,5 +86,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Sismos dev server running at http://localhost:${PORT}`);
+  console.log(`Perioteca dev server running at http://localhost:${PORT}`);
 });
