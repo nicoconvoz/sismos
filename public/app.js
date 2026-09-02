@@ -115,7 +115,9 @@
       .pointColor(function (d) { return colorFor(d); })
       .pointRadius(function (d) { return 0.14 + d.magnitude * 0.09; })
       .pointsMerge(false)
-      .pointLabel(tooltipHtml)
+      // Touch devices fire hover + click on the same tap, so the hover
+      // bubble and the card would open together; keep only the card there.
+      .pointLabel(isTouch() ? function () { return null; } : tooltipHtml)
       .onPointClick(showCard)
       // Rings, like the old sismos globe: red alerts ripple in red; events
       // that entered within the last hour ripple in their tier color.
@@ -134,9 +136,27 @@
       globe.controls().autoRotate = false;
     }, { once: true });
 
+    applyViewOffset();
     window.addEventListener('resize', function () {
       globe.width(window.innerWidth).height(window.innerHeight);
+      applyViewOffset();
     });
+  }
+
+  // The canvas spans the whole viewport (so the starfield is alive
+  // everywhere), but the globe should center in the free band between the
+  // top bar and the bottom UI (toast + sponsor). Shifting the camera's view
+  // offset moves the render center without shrinking the canvas.
+  function applyViewOffset() {
+    var W = window.innerWidth;
+    var H = window.innerHeight;
+    var mobile = W < 640;
+    var chromeTop = mobile ? 150 : 52;
+    var chromeBottom = mobile ? 140 : 148;
+    // Positive y renders the scene higher: the center lands at the middle
+    // of the free band instead of the middle of the viewport.
+    var y = (chromeBottom - chromeTop) / 2;
+    globe.camera().setViewOffset(W, H, 0, y, W, H);
 
     buildBorderLines();
   }
@@ -219,6 +239,10 @@
       });
   }
 
+  function isTouch() {
+    return window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+  }
+
   function hexToRgb(hex) {
     return parseInt(hex.slice(1, 3), 16) + ',' + parseInt(hex.slice(3, 5), 16) + ',' +
       parseInt(hex.slice(5, 7), 16);
@@ -278,13 +302,22 @@
     renderToast(events);
   }
 
+  // Once tapped, the strongest-event toast stays hidden until a DIFFERENT
+  // event becomes the strongest one.
+  var dismissedTopId = null;
+
   function renderToast(events) {
     if (!events.length) { els.toast.classList.add('hidden'); return; }
     var top = events.reduce(function (a, b) { return b.magnitude > a.magnitude ? b : a; });
+    if (top.id === dismissedTopId) { els.toast.classList.add('hidden'); return; }
     els.toast.textContent = '⬤ ' + I18n.t('topEvent', LANG) + ': ' + titleOf(top) +
       ' (' + top.magnitude.toFixed(1) + ')';
     els.toast.classList.remove('hidden');
-    els.toast.onclick = function () { flyTo(top); };
+    els.toast.onclick = function () {
+      dismissedTopId = top.id;
+      els.toast.classList.add('hidden');
+      flyTo(top);
+    };
   }
 
   function flyTo(e) {
@@ -359,12 +392,74 @@
       '<h3 class="ec-title">' + escapeHtml(titleOf(e)) + '</h3>' +
       '<div class="ec-badges">' + badges.join('') + '</div>' +
       '<div class="ec-rows">' + rows.join('') + '</div>' +
-      (e.url ? '<a class="ec-link" href="' + encodeURI(e.url) + '" target="_blank" rel="noopener noreferrer">' +
-        I18n.t('report', LANG) + ' ↗</a>' : '');
+      '<button class="ec-link" id="cardNews" type="button">' + I18n.t('report', LANG) + ' ↗</button>';
     els.card.classList.remove('hidden');
     els.card.querySelector('.ec-close').onclick = function () {
       els.card.classList.add('hidden');
     };
+    els.card.querySelector('#cardNews').onclick = function () { openNews(e); };
+  }
+
+  // ---------- Zone news modal ----------
+  // "Ver informe completo" opens local press coverage of the event (Google
+  // News RSS, proxied by /api/news in the zone's own language/edition), the
+  // official agency report, and X's live comment search.
+
+  function openNews(e) {
+    var modal = $('newsModal');
+    var body = $('newsBody');
+    $('newsTitle').textContent = titleOf(e);
+
+    var official = $('newsOfficial');
+    if (e.url) {
+      official.href = encodeURI(e.url);
+      official.hidden = false;
+    } else {
+      official.hidden = true;
+    }
+
+    var place = (e.nearData && e.nearData.name) || e.country || '';
+    var cc = e.cc || (e.nearData && e.nearData.cc) || '';
+
+    body.innerHTML = '<div class="news-empty">' + I18n.t('loading', LANG) + '</div>';
+    modal.classList.remove('hidden');
+
+    // News in the viewer's language; the server only picks the local zone
+    // edition when its press speaks that same language.
+    fetch('/api/news?kind=' + encodeURIComponent(e.kind) +
+      '&place=' + encodeURIComponent(place) + '&cc=' + encodeURIComponent(cc) +
+      '&lang=' + encodeURIComponent(LANG))
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        if (!data.items || !data.items.length) {
+          body.innerHTML = '<div class="news-empty">' + I18n.t('noNews', LANG) + '</div>';
+          return;
+        }
+        body.innerHTML = data.items.map(function (it) {
+          return '<div class="news-item">' +
+            '<a href="' + encodeURI(it.link) + '" target="_blank" rel="noopener noreferrer">' +
+            escapeHtml(it.title) + '</a>' +
+            '<span class="news-meta">' + (it.source ? escapeHtml(it.source) + ' · ' : '') +
+            I18n.formatDateTime(it.pubDate, LANG) + '</span></div>';
+        }).join('');
+      })
+      .catch(function () {
+        body.innerHTML = '<div class="news-empty">' + I18n.t('noNews', LANG) + '</div>';
+      });
+  }
+
+  function wireNewsModal() {
+    var modal = $('newsModal');
+    $('newsClose').addEventListener('click', function () { modal.classList.add('hidden'); });
+    modal.addEventListener('click', function (e) {
+      if (e.target.hasAttribute('data-close')) modal.classList.add('hidden');
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !modal.classList.contains('hidden')) modal.classList.add('hidden');
+    });
   }
 
   function escapeHtml(s) {
@@ -597,11 +692,13 @@
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden && Date.now() - lastLoadAt > 30 * 1000) load();
   });
-  if (window.innerWidth < 640) els.panel.classList.add('collapsed');
+  // The filters panel starts closed everywhere; only the button opens it.
+  els.panel.classList.add('collapsed');
 
   applyStatic();
   initGlobe();
   wireMochila();
+  wireNewsModal();
   load();
   scheduleRefresh();
 })();

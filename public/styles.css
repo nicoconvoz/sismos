@@ -489,6 +489,30 @@ html, body {
 
 .modal-success { padding: 26px 6px; text-align: center; font-size: 1rem; font-weight: 600; }
 
+/* ---------- Zone news modal ---------- */
+
+.news-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.news-actions .btn { text-decoration: none; }
+
+.news-sub {
+  margin: 0 0 6px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+}
+
+.news-list { min-height: 60px; }
+
+.news-item { padding: 9px 0; border-top: 1px solid var(--panel-border); }
+.news-item a { color: var(--text); text-decoration: none; font-size: 13px; line-height: 1.4; }
+.news-item a:hover { color: var(--accent); }
+.news-meta { display: block; margin-top: 3px; font-size: 11px; color: var(--muted); }
+
+.news-empty { padding: 14px 0; color: var(--muted); font-size: 13px; }
+
+button.ec-link { background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
+
 /* Honeypot: off-screen, never display:none (some bots skip hidden inputs). */
 .hp-field {
   position: absolute;
@@ -505,7 +529,14 @@ html, body {
 @media (max-width: 640px) {
   .subtitle { display: none; }
   .updated { display: none; }
-  .panel { width: calc(100vw - 24px); }
+  /* Brand on its own row, counter + buttons below — they collide side by side. */
+  .topbar { flex-direction: column; align-items: flex-start; gap: 6px; }
+  /* Counter on the left; Actualizar + Filtros grouped on the right with a
+     small gap instead of spreading across the whole row. */
+  .topbar-right { width: 100%; justify-content: flex-start; gap: 8px; }
+  .topbar-right #refreshBtn { margin-left: auto; }
+  .panel { width: calc(100vw - 24px); top: 96px; max-height: calc(100vh - 120px); }
   .event-card { left: 12px; bottom: 12px; }
-  .toast { bottom: auto; top: 64px; }
+  .toast { bottom: auto; top: 104px; }
+  .alert-toast { top: 148px; }
 }

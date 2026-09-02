@@ -8,6 +8,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import eventsHandler from './api/events.js';
 import mochilaHandler from './api/mochila.js';
+import newsHandler from './api/news.js';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'public');
 const PORT = Number(process.env.PORT) || 3000;
@@ -25,7 +26,8 @@ const MIME = {
 
 const API_ROUTES = {
   '/api/events': eventsHandler,
-  '/api/mochila': mochilaHandler
+  '/api/mochila': mochilaHandler,
+  '/api/news': newsHandler
 };
 
 /** Minimal Vercel-style res shim on top of node:http ServerResponse. */

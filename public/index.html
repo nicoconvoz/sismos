@@ -119,6 +119,19 @@
       <a class="btn sponsor-donate" href="mailto:ingenieriaaplicada@opendoors.com.ar?subject=Donaci%C3%B3n%20-%20Perioteca">Donar</a>
     </div>
 
+    <div id="newsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="newsTitle">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-card">
+        <button id="newsClose" class="ec-close modal-close" type="button" aria-label="Cerrar">×</button>
+        <h2 id="newsTitle" class="modal-title"></h2>
+        <div class="news-actions">
+          <a id="newsOfficial" class="btn" target="_blank" rel="noopener noreferrer" data-i18n="officialReport">Informe oficial</a>
+        </div>
+        <h3 class="news-sub" data-i18n="zoneNews">Noticias de la zona</h3>
+        <div id="newsBody" class="news-list"></div>
+      </div>
+    </div>
+
     <div id="mochilaModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="mochilaTitle">
       <div class="modal-backdrop" data-close></div>
       <div class="modal-card">
