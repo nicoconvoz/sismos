@@ -35,7 +35,7 @@ export default async function handler(req, res) {
 
   const hit = cache.get(target);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
-    res.setHeader('Cache-Control', 's-maxage=3600');
+    res.setHeader('Cache-Control', 'max-age=300, s-maxage=3600');
     return res.status(200).json(hit.payload);
   }
 
@@ -44,7 +44,7 @@ export default async function handler(req, res) {
     const payload = { url: target, ...result };
     if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value);
     cache.set(target, { payload, at: Date.now() });
-    res.setHeader('Cache-Control', 's-maxage=3600');
+    res.setHeader('Cache-Control', 'max-age=300, s-maxage=3600');
     return res.status(200).json(payload);
   } catch (err) {
     // Unreachable upstream: let the client try the iframe anyway.

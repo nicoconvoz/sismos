@@ -13,7 +13,8 @@ import {
   frameBlocked,
   filterBySince,
   filterByKeyword,
-  properNameKeyword
+  properNameKeyword,
+  termLadder
 } from '../lib/news.js';
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -89,20 +90,47 @@ test('countryNameFor localizes country names for query building', () => {
   assert.equal(countryNameFor(null, 'es'), null);
 });
 
-test('filterBySince keeps only coverage published after the event started', () => {
+test('filterBySince keeps only coverage published strictly after the event', () => {
   const items = [
     { title: 'old flood', pubDate: '2026-08-10T12:00:00.000Z' },
-    { title: 'just before (timezone slop)', pubDate: '2026-08-25T19:00:00.000Z' },
-    { title: 'same day', pubDate: '2026-08-26T06:00:00.000Z' },
+    { title: 'three hours before', pubDate: '2026-08-25T19:00:00.000Z' },
+    { title: 'same day, after', pubDate: '2026-08-26T06:00:00.000Z' },
     { title: 'a week later', pubDate: '2026-09-01T10:00:00.000Z' }
   ];
-  // Event started Aug 25 22:00 UTC; a 6 h margin admits same-evening pieces.
+  // Event started Aug 25 22:00 UTC: anything published earlier is about
+  // something else — no slop margin by default.
   const kept = filterBySince(items, '2026-08-25T22:00:00Z');
-  assert.deepEqual(kept.map((i) => i.title), ['just before (timezone slop)', 'same day', 'a week later']);
+  assert.deepEqual(kept.map((i) => i.title), ['same day, after', 'a week later']);
   // No since -> unchanged.
   assert.equal(filterBySince(items, null).length, 4);
   // Bad since -> unchanged (never hide everything by accident).
   assert.equal(filterBySince(items, 'garbage').length, 4);
+});
+
+test('termLadder retries city -> state -> country until something is found', () => {
+  // Local press: the town first, but the press mostly covers the STATE
+  // ("sismo Oaxaca"), then the country as a last resort.
+  assert.deepEqual(
+    termLadder({ localPress: true, place: 'San Miguel del Puerto', admin1: 'Oaxaca', country: 'México' }),
+    ['San Miguel del Puerto', 'Oaxaca', 'México']
+  );
+  // Foreign-language press: the town is useless; state, then country.
+  assert.deepEqual(
+    termLadder({ localPress: false, place: 'Panauti', admin1: 'Bagmati Province', country: 'Nepal' }),
+    ['Bagmati Province', 'Nepal']
+  );
+  // Named storms search by name only — a country fallback would mix in
+  // every other storm of the season.
+  assert.deepEqual(
+    termLadder({ localPress: false, place: '', admin1: null, country: 'México', properName: 'Karina' }),
+    ['Karina']
+  );
+  // Duplicates and empties collapse (city named like its state).
+  assert.deepEqual(
+    termLadder({ localPress: true, place: 'Oaxaca', admin1: 'Oaxaca', country: 'México' }),
+    ['Oaxaca', 'México']
+  );
+  assert.deepEqual(termLadder({ localPress: true, place: '', admin1: null, country: null }), []);
 });
 
 test('properNameKeyword cleans agency storm names for searching', () => {

@@ -121,13 +121,13 @@
       // bubble and the card would open together; keep only the card there.
       .pointLabel(isTouch() ? function () { return null; } : tooltipHtml)
       // Clicks resolve by proximity against rendered events (the original
-      // sismos model): per-mesh picking on flat discs is unreliable, and
-      // this also lets a click BETWEEN packed circles open the swarm picker.
+      // sismos model). BOTH handlers are needed: a click landing exactly ON
+      // a disc goes to the point object (globe.gl then skips onGlobeClick),
+      // while a click on the sphere between packed circles goes to the
+      // globe — either way the same proximity resolution runs.
+      .onPointClick(function (d) { resolveClick(d.lat, d.lon); })
       .onGlobeClick(function (coords) {
-        if (!coords) return;
-        var near = eventsNear(coords.lat, coords.lng);
-        if (near.length === 1) showCard(near[0]);
-        else if (near.length > 1) showEventPicker(near);
+        if (coords) resolveClick(coords.lat, coords.lng);
       })
       // Rings, like the old sismos globe: red alerts ripple in red; events
       // that entered within the last hour ripple in their tier color.
@@ -411,6 +411,12 @@
       .map(function (x) { return x.e; });
   }
 
+  function resolveClick(lat, lng) {
+    var near = eventsNear(lat, lng);
+    if (near.length === 1) showCard(near[0]);
+    else if (near.length > 1) showEventPicker(near);
+  }
+
   function relativeTime(iso) {
     var mins = Math.round((Date.parse(iso) - Date.now()) / 60000);
     var rtf = new Intl.RelativeTimeFormat(LANG, { numeric: 'auto' });
@@ -527,6 +533,7 @@
     }
 
     var place = (e.nearData && e.nearData.name) || e.country || '';
+    var admin1 = (e.nearData && e.nearData.admin1) || '';
     var cc = e.cc || (e.nearData && e.nearData.cc) || '';
 
     body.innerHTML = '<div class="news-empty">' + I18n.t('loading', LANG) + '</div>';
@@ -535,7 +542,8 @@
     // News in the viewer's language; the server only picks the local zone
     // edition when its press speaks that same language.
     fetch('/api/news?kind=' + encodeURIComponent(e.kind) +
-      '&place=' + encodeURIComponent(place) + '&cc=' + encodeURIComponent(cc) +
+      '&place=' + encodeURIComponent(place) + '&admin1=' + encodeURIComponent(admin1) +
+      '&cc=' + encodeURIComponent(cc) +
       '&lang=' + encodeURIComponent(LANG) +
       '&since=' + encodeURIComponent(e.time) +
       '&name=' + encodeURIComponent(e.eventName || ''))

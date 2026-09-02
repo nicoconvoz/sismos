@@ -12,7 +12,8 @@ import {
   countryNameFor,
   filterBySince,
   filterByKeyword,
-  properNameKeyword
+  properNameKeyword,
+  termLadder
 } from '../lib/news.js';
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -43,6 +44,7 @@ export default async function handler(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const kind = (url.searchParams.get('kind') || '').trim().toLowerCase();
   const place = (url.searchParams.get('place') || '').trim();
+  const admin1 = (url.searchParams.get('admin1') || '').trim();
   const cc = (url.searchParams.get('cc') || '').toUpperCase();
   const lang = (url.searchParams.get('lang') || 'en').toLowerCase();
   // Event start time: only coverage published from then on is relevant —
@@ -56,7 +58,7 @@ export default async function handler(req, res) {
   if (!/^[a-z]{2,24}$/.test(kind)) {
     return res.status(400).json({ error: 'invalid_kind' });
   }
-  if (place.length > 80 || /[<>]/.test(place)) {
+  if (place.length > 80 || /[<>]/.test(place) || admin1.length > 80 || /[<>]/.test(admin1)) {
     return res.status(400).json({ error: 'invalid_place' });
   }
   if (cc && !/^[A-Z]{2}$/.test(cc)) {
@@ -69,34 +71,60 @@ export default async function handler(req, res) {
   // The viewer's language drives the search wording and the market; the
   // event country only wins when its press speaks that same language.
   const { mkt } = editionFor(lang, cc || null);
-  // Named phenomena search by their proper name ("ciclón Karina") — the
-  // country would mix in every other storm of the season. Unnamed events:
-  // local press knows the town; foreign-language press covers the COUNTRY —
-  // "inundación Panautī" finds nothing in Spanish, "inundación Nepal" does.
+  // Search-term ladder: try the most specific term first, then widen until
+  // some coverage appears — the press mostly writes at state level ("sismo
+  // Oaxaca"), not the nearest village the geocoder names.
   const localPress = Boolean(cc) && zoneLang(cc) === lang;
-  const placeTerm = localPress ? place : countryNameFor(cc, lang) || place;
-  const q = buildNewsQuery({ kind, place: properName || placeTerm, hl: lang });
-  // Relevance gate: the keyword must appear in each article's TITLE —
-  // the storm's name, or the place/country for unnamed events.
-  const keywords = properName ? [properName] : [place, countryNameFor(cc, lang)];
-  if (q.length < 2 || q.length > 120) {
+  const country = countryNameFor(cc, lang);
+  const terms = termLadder({ localPress, place, admin1, country, properName });
+  if (!terms.length && place) terms.push(place);
+  // Relevance gate: the article TITLE must mention the storm's name, or any
+  // of the event's location terms (town, state, country).
+  const keywords = properName ? [properName] : [place, admin1, country];
+  if (!terms.length) {
     return res.status(400).json({ error: 'invalid_query' });
   }
 
   // Cached payloads are post-filter, so every filter input keys the cache.
-  const key = `${q}|${mkt}|${since || ''}|${place}|${properName || ''}`;
+  const key = [kind, place, admin1, cc, lang, since || '', properName || '', mkt].join('|');
   const cached = getCached(key);
   if (cached) {
-    res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=1200');
+    res.setHeader('Cache-Control', 'max-age=60, s-maxage=600, stale-while-revalidate=1200');
     return res.status(200).json(cached);
   }
 
   try {
-    const items = filterByKeyword(filterBySince(await fetchZoneNews({ q, mkt }), since), keywords)
-      .slice(0, MAX_ITEMS);
+    // Walk the ladder until a step yields relevant coverage published
+    // STRICTLY after the event's own date and time — an article from before
+    // the event is necessarily about something else. A very fresh event may
+    // legitimately show nothing until the press catches up.
+    // Steps accumulate (deduped by link) while results are scarce: a state
+    // rung with one article still gets the country rung's coverage added.
+    const MIN_ITEMS = 3;
+    let items = [];
+    let q = null;
+    const seen = new Set();
+    for (const term of terms) {
+      const tq = buildNewsQuery({ kind, place: term, hl: lang });
+      if (tq.length < 2 || tq.length > 120) continue;
+      if (!q) q = tq;
+      const relevant = filterBySince(
+        filterByKeyword(await fetchZoneNews({ q: tq, mkt }), keywords),
+        since
+      );
+      for (const it of relevant) {
+        if (!seen.has(it.link) && items.length < MAX_ITEMS) {
+          seen.add(it.link);
+          items.push(it);
+        }
+      }
+      if (items.length) q = tq;
+      if (items.length >= MIN_ITEMS) break;
+    }
+    items.sort((a, b) => Date.parse(b.pubDate) - Date.parse(a.pubDate));
     const payload = { updatedAt: new Date().toISOString(), q, mkt, since, count: items.length, items };
     setCached(key, payload);
-    res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=1200');
+    res.setHeader('Cache-Control', 'max-age=60, s-maxage=600, stale-while-revalidate=1200');
     return res.status(200).json(payload);
   } catch (err) {
     res.setHeader('Cache-Control', 'no-store');
