@@ -460,7 +460,9 @@
     // edition when its press speaks that same language.
     fetch('/api/news?kind=' + encodeURIComponent(e.kind) +
       '&place=' + encodeURIComponent(place) + '&cc=' + encodeURIComponent(cc) +
-      '&lang=' + encodeURIComponent(LANG))
+      '&lang=' + encodeURIComponent(LANG) +
+      '&since=' + encodeURIComponent(e.time) +
+      '&name=' + encodeURIComponent(e.eventName || ''))
       .then(function (res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);
         return res.json();

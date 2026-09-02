@@ -10,7 +10,10 @@ import {
   zoneLang,
   editionFor,
   countryNameFor,
-  frameBlocked
+  frameBlocked,
+  filterBySince,
+  filterByKeyword,
+  properNameKeyword
 } from '../lib/news.js';
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -84,6 +87,51 @@ test('countryNameFor localizes country names for query building', () => {
   assert.equal(countryNameFor('DE', 'es'), 'Alemania');
   assert.equal(countryNameFor('BR', 'en'), 'Brazil');
   assert.equal(countryNameFor(null, 'es'), null);
+});
+
+test('filterBySince keeps only coverage published after the event started', () => {
+  const items = [
+    { title: 'old flood', pubDate: '2026-08-10T12:00:00.000Z' },
+    { title: 'just before (timezone slop)', pubDate: '2026-08-25T19:00:00.000Z' },
+    { title: 'same day', pubDate: '2026-08-26T06:00:00.000Z' },
+    { title: 'a week later', pubDate: '2026-09-01T10:00:00.000Z' }
+  ];
+  // Event started Aug 25 22:00 UTC; a 6 h margin admits same-evening pieces.
+  const kept = filterBySince(items, '2026-08-25T22:00:00Z');
+  assert.deepEqual(kept.map((i) => i.title), ['just before (timezone slop)', 'same day', 'a week later']);
+  // No since -> unchanged.
+  assert.equal(filterBySince(items, null).length, 4);
+  // Bad since -> unchanged (never hide everything by accident).
+  assert.equal(filterBySince(items, 'garbage').length, 4);
+});
+
+test('properNameKeyword cleans agency storm names for searching', () => {
+  assert.equal(properNameKeyword('KARINA-26'), 'Karina');
+  assert.equal(properNameKeyword('Edouard'), 'Edouard');
+  assert.equal(properNameKeyword(''), null);
+  assert.equal(properNameKeyword(null), null);
+});
+
+test('filterByKeyword requires a keyword in the title, accent-insensitively', () => {
+  const items = [
+    { title: 'El ciclón Edouard tocó tierra en el Golfo de México' },
+    { title: 'Huracán KARINA se intensifica frente a Baja California' },
+    { title: 'Instituto quiere el invicto ante un “Ciclón” necesitado' },
+    { title: 'Inundacion en NEPAL: rescates continúan' }
+  ];
+  // Named storm: only its own coverage survives — no Edouard, no football.
+  assert.deepEqual(
+    filterByKeyword(items, ['Karina']).map((i) => i.title),
+    ['Huracán KARINA se intensifica frente a Baja California']
+  );
+  // Unnamed events accept place OR country (accent differences tolerated).
+  assert.deepEqual(
+    filterByKeyword(items, ['Panauti', 'Nepal']).map((i) => i.title),
+    ['Inundacion en NEPAL: rescates continúan']
+  );
+  // No keywords -> unchanged.
+  assert.equal(filterByKeyword(items, []).length, 4);
+  assert.equal(filterByKeyword(items, [null, '']).length, 4);
 });
 
 test('frameBlocked reads X-Frame-Options and CSP frame-ancestors', () => {
