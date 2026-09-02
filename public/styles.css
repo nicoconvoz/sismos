@@ -585,15 +585,22 @@ button.ec-link { background: none; border: none; padding: 0; font: inherit; curs
   .toast { bottom: auto; top: 104px; }
   .alert-toast { top: 148px; }
 
-  /* Modals become bottom sheets: full width, close button always reachable. */
+  /* Modals become bottom sheets: full width, close button always reachable.
+     Heights use dvh (real visual viewport) with a cap that always clears the
+     two-row header — plain vh includes the area behind the mobile browser
+     chrome and pushed the sheet's close bar under the app header. */
   .modal { align-items: flex-end; padding: 0; }
   .modal-card {
     width: 100%;
-    max-height: 88vh;
+    max-height: calc(100vh - 150px);
+    max-height: calc(100dvh - 150px);
     border-radius: 14px 14px 0 0;
     border-left: none;
     border-right: none;
     border-bottom: none;
   }
-  .article-card { height: 88vh; }
+  .article-card {
+    height: calc(100vh - 150px);
+    height: calc(100dvh - 150px);
+  }
 }
