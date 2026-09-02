@@ -50,9 +50,9 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'invalid_language' });
   }
 
-  // The viewer's language drives the search wording and the edition; the
+  // The viewer's language drives the search wording and the market; the
   // event country only wins when its press speaks that same language.
-  const { gl, hl } = editionFor(lang, cc || null);
+  const { mkt } = editionFor(lang, cc || null);
   // Local press knows the town; foreign-language press covers the COUNTRY —
   // "inundación Panautī" finds nothing in Spanish, "inundación Nepal" does.
   const localPress = Boolean(cc) && zoneLang(cc) === lang;
@@ -62,7 +62,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'invalid_query' });
   }
 
-  const key = `${q}|${gl}|${hl}`;
+  const key = `${q}|${mkt}`;
   const cached = getCached(key);
   if (cached) {
     res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=1200');
@@ -70,8 +70,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    const items = (await fetchZoneNews({ q, gl, hl })).slice(0, MAX_ITEMS);
-    const payload = { updatedAt: new Date().toISOString(), q, gl, hl, count: items.length, items };
+    const items = (await fetchZoneNews({ q, mkt })).slice(0, MAX_ITEMS);
+    const payload = { updatedAt: new Date().toISOString(), q, mkt, count: items.length, items };
     setCached(key, payload);
     res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=1200');
     return res.status(200).json(payload);

@@ -438,17 +438,78 @@
           body.innerHTML = '<div class="news-empty">' + I18n.t('noNews', LANG) + '</div>';
           return;
         }
-        body.innerHTML = data.items.map(function (it) {
+        body.innerHTML = data.items.map(function (it, i) {
           return '<div class="news-item">' +
-            '<a href="' + encodeURI(it.link) + '" target="_blank" rel="noopener noreferrer">' +
+            '<a href="' + encodeURI(it.link) + '" data-idx="' + i + '">' +
             escapeHtml(it.title) + '</a>' +
             '<span class="news-meta">' + (it.source ? escapeHtml(it.source) + ' · ' : '') +
             I18n.formatDateTime(it.pubDate, LANG) + '</span></div>';
         }).join('');
+        // Articles open inside the app's reader modal, never a new tab.
+        body.querySelectorAll('a[data-idx]').forEach(function (a) {
+          a.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            openArticle(data.items[Number(a.getAttribute('data-idx'))]);
+          });
+        });
       })
       .catch(function () {
         body.innerHTML = '<div class="news-empty">' + I18n.t('noNews', LANG) + '</div>';
       });
+  }
+
+  // ---------- Article reader modal ----------
+  // Bing items link straight to the publisher, so the article loads in an
+  // in-app iframe. Outlets that forbid embedding (X-Frame-Options) leave the
+  // frame blank; the always-visible "open on the site" button covers those.
+
+  function openArticle(item) {
+    var frame = $('articleFrame');
+    var fallback = $('articleFallback');
+    $('articleTitle').textContent = item.title;
+    $('articleOpen').href = encodeURI(item.link);
+    $('articleFallbackOpen').href = encodeURI(item.link);
+    fallback.classList.add('hidden');
+    frame.classList.remove('hidden');
+    frame.src = 'about:blank';
+    $('articleModal').classList.remove('hidden');
+
+    // Ask the server whether the outlet allows iframes (it reads the
+    // X-Frame-Options / frame-ancestors headers); blocked outlets get a
+    // clean fallback instead of the browser's raw connection error.
+    fetch('/api/embed?url=' + encodeURIComponent(item.link))
+      .then(function (res) { return res.json(); })
+      .then(function (data) { return data.embeddable !== false; })
+      .catch(function () { return true; })
+      .then(function (embeddable) {
+        // Ignore stale probes if the user already closed or switched.
+        if ($('articleModal').classList.contains('hidden')) return;
+        if ($('articleOpen').href !== encodeURI(item.link)) return;
+        if (embeddable) {
+          frame.src = encodeURI(item.link);
+        } else {
+          frame.classList.add('hidden');
+          $('articleFallbackText').textContent =
+            (item.source ? item.source + ' ' : '') + I18n.t('notEmbeddable', LANG);
+          fallback.classList.remove('hidden');
+        }
+      });
+  }
+
+  function closeArticle() {
+    $('articleModal').classList.add('hidden');
+    // Unload the page so background audio/video stops.
+    $('articleFrame').src = 'about:blank';
+  }
+
+  function wireArticleModal() {
+    $('articleClose').addEventListener('click', closeArticle);
+    $('articleModal').addEventListener('click', function (e) {
+      if (e.target.hasAttribute('data-close')) closeArticle();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !$('articleModal').classList.contains('hidden')) closeArticle();
+    });
   }
 
   function wireNewsModal() {
@@ -699,6 +760,7 @@
   initGlobe();
   wireMochila();
   wireNewsModal();
+  wireArticleModal();
   load();
   scheduleRefresh();
 })();

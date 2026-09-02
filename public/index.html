@@ -132,6 +132,22 @@
       </div>
     </div>
 
+    <div id="articleModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Lector de noticia">
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-card article-card">
+        <div class="article-bar">
+          <span id="articleTitle" class="article-title"></span>
+          <a id="articleOpen" class="btn" target="_blank" rel="noopener noreferrer" data-i18n="openSite">Abrir en el sitio</a>
+          <button id="articleClose" class="btn" type="button" aria-label="Cerrar">×</button>
+        </div>
+        <iframe id="articleFrame" class="article-frame" referrerpolicy="no-referrer" title="Noticia"></iframe>
+        <div id="articleFallback" class="article-fallback hidden">
+          <p id="articleFallbackText"></p>
+          <a id="articleFallbackOpen" class="btn" target="_blank" rel="noopener noreferrer" data-i18n="openSite">Abrir en el sitio</a>
+        </div>
+      </div>
+    </div>
+
     <div id="mochilaModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="mochilaTitle">
       <div class="modal-backdrop" data-close></div>
       <div class="modal-card">
