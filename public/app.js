@@ -40,6 +40,29 @@
     firms: 'NASA FIRMS'
   };
 
+  // Every source citation links to the original site — credit where due.
+  var SOURCE_URLS = {
+    gdacs: 'https://www.gdacs.org',
+    eonet: 'https://eonet.gsfc.nasa.gov',
+    usgs: 'https://earthquake.usgs.gov',
+    emsc: 'https://www.emsc-csem.org',
+    inpres: 'https://www.inpres.gob.ar',
+    csn: 'https://www.sismologia.cl',
+    nhc: 'https://www.nhc.noaa.gov',
+    smn: 'https://www.smn.gob.ar',
+    meteoalarm: 'https://meteoalarm.org',
+    swic: 'https://severeweather.wmo.int',
+    firms: 'https://firms.modaps.eosdis.nasa.gov'
+  };
+
+  function sourceLink(s, className) {
+    var label = SOURCE_LABELS[s] || s;
+    var url = SOURCE_URLS[s];
+    if (!url) return '<span class="' + (className || 'source-link') + '">' + escapeHtml(label) + '</span>';
+    return '<a class="' + (className || 'source-link') + '" href="' + url +
+      '" target="_blank" rel="noopener noreferrer">' + escapeHtml(label) + '</a>';
+  }
+
   function $(id) { return document.getElementById(id); }
 
   var els = {
@@ -568,7 +591,7 @@
     if (e.alert) {
       badges.push('<span class="badge badge-alert-' + e.alert + '">' + I18n.alertLabel(e.alert, LANG) + '</span>');
     }
-    badges.push('<span class="badge badge-source">' + (SOURCE_LABELS[e.source] || e.source) + '</span>');
+    badges.push(sourceLink(e.source, 'badge badge-source'));
 
     els.card.innerHTML =
       '<button class="ec-close" aria-label="Cerrar">×</button>' +
@@ -780,9 +803,9 @@
         });
       }
     });
-    els.sourcesNote.textContent = Object.keys(counts).map(function (s) {
-      return (SOURCE_LABELS[s] || s) + ': ' + counts[s];
-    }).join(' · ') + ' — ' + I18n.t('merged', LANG);
+    els.sourcesNote.innerHTML = Object.keys(counts).map(function (s) {
+      return sourceLink(s) + ': ' + counts[s];
+    }).join(' · ') + ' — ' + escapeHtml(I18n.t('merged', LANG));
     render();
   }
 

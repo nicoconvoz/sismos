@@ -284,7 +284,12 @@ html, body {
 .badge-alert-orange { background: var(--orange); color: #201004; border-color: var(--orange); }
 .badge-alert-yellow { background: var(--yellow); color: #221a02; border-color: var(--yellow); }
 .badge-alert-green { background: rgba(63, 208, 138, 0.25); color: var(--green); }
-.badge-source { color: var(--muted); }
+.badge-source { color: var(--muted); text-decoration: none; }
+a.badge-source:hover { color: var(--accent); border-color: var(--accent); }
+
+/* Source citations link home as attribution. */
+.source-link { color: var(--muted); text-decoration: underline; text-decoration-color: rgba(147, 163, 188, 0.4); }
+.source-link:hover { color: var(--accent); }
 
 .ec-rows { margin: 0; font-size: 13px; color: var(--muted); }
 .ec-rows div { padding: 2px 0; }
