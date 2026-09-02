@@ -199,6 +199,14 @@ html, body {
 
 .dot.pulse { animation: pulse 1.6s ease-out infinite; }
 
+.dot-upcoming {
+  background: var(--bg);
+  box-shadow: 0 0 0 2.5px var(--yellow);
+  width: 9px;
+  height: 9px;
+  margin: 1.5px;
+}
+
 @keyframes pulse {
   0% { box-shadow: 0 0 0 0 rgba(255, 77, 94, 0.7); }
   100% { box-shadow: 0 0 0 9px rgba(255, 77, 94, 0); }

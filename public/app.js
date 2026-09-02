@@ -135,8 +135,14 @@
       .ringLng(function (d) { return d.lon; })
       // Flat circles on the surface (near-zero altitude), like the sismos
       // globe — tall cylinders read wrong at grazing angles.
-      .pointAltitude(function () { return 0.0015 * zoomScale; })
-      .pointColor(function (d) { return colorFor(d); })
+      .pointAltitude(pointAltitudeOf)
+      // Upcoming warnings render inverted: the RING carries the magnitude
+      // color (the halo disc underneath) and the center is dark — a hollow
+      // dot reads as "not happening yet".
+      .pointColor(function (d) {
+        if (d.__halo) return colorFor(d);
+        return warningUpcoming(d) ? 'rgba(7,10,16,0.95)' : colorFor(d);
+      })
       .pointRadius(pointRadius)
       .pointsMerge(false)
       // Touch devices fire hover + click on the same tap, so the hover
@@ -172,7 +178,7 @@
       clearTimeout(zoomTimer);
       zoomTimer = setTimeout(function () {
         globe.pointRadius(pointRadius);
-        globe.pointAltitude(function () { return 0.0015 * zoomScale; });
+        globe.pointAltitude(pointAltitudeOf);
         globe.ringMaxRadius(ringMaxRadius);
       }, 150);
     });
@@ -294,7 +300,14 @@
 
   function pointRadius(e) {
     // Generous minimum so small events remain visible on the whole globe.
-    return Math.max(0.32, 0.22 + 0.08 * e.magnitude) * zoomScale;
+    var r = Math.max(0.32, 0.22 + 0.08 * e.magnitude) * zoomScale;
+    // Halo discs sit under upcoming warnings, slightly larger, so the
+    // magnitude color shows ringed in white.
+    return e.__halo ? r * 1.38 : r;
+  }
+
+  function pointAltitudeOf(e) {
+    return (e.__halo ? 0.0008 : 0.0015) * zoomScale;
   }
 
   function ringMaxRadius(e) {
@@ -358,7 +371,14 @@
     var events = visibleEvents();
     var now = Date.now();
     renderedEvents = events;
-    globe.pointsData(events);
+    // Upcoming warnings (not started yet) get a white halo disc underneath:
+    // magnitude color ringed in white marks "this is coming, not happening".
+    var halos = events.filter(warningUpcoming).map(function (e) {
+      var h = Object.assign({}, e);
+      h.__halo = true;
+      return h;
+    });
+    globe.pointsData(halos.concat(events));
     // Any kind ripples on fresh ACTIVITY: quakes by origin time, ongoing
     // events (fires, floods, cyclones) by their latest agency update, and
     // official warnings while their phenomenon is still upcoming.
