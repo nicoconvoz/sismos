@@ -121,9 +121,10 @@
   // ---------- Globe ----------
 
   function initGlobe() {
+    // No bump map: it costs ~1 MB of texture for relief that is invisible
+    // at this scale — mobile loads matter more.
     globe = Globe()(els.globe)
       .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-night.jpg')
-      .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
       .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
       .atmosphereColor('#4ea1ff')
       .atmosphereAltitude(0.16)
@@ -693,40 +694,91 @@
   }
 
   // ---------- Data ----------
+  // The three source groups load IN PARALLEL and each paints as soon as it
+  // lands (progressive rendering: the globe is visible from second zero and
+  // points pop in). The refresh button doubles as a status light: pulsing
+  // yellow while loading, steady green when every group settled.
+
+  var GROUPS = ['alerts', 'quakes', 'nature'];
+  var GROUP_EQ_MERGE = { maxDtMs: 90 * 1000, maxKm: 150 };
+  var groupData = { alerts: null, quakes: null, nature: null };
+  var pendingGroups = 0;
+
+  function setBtnState(state) {
+    var loading = state === 'loading';
+    els.refreshBtn.classList.toggle('btn-loading', loading);
+    els.refreshBtn.classList.toggle('btn-ready', state === 'ready');
+    // While loading the button is a status light, not a control: it says
+    // "Actualizando" and cannot be pressed; green restores "Actualizar".
+    els.refreshBtn.disabled = loading;
+    els.refreshBtn.textContent = I18n.t(loading ? 'refreshing' : 'refresh', LANG);
+  }
+
+  // Same cross-group dedupe the server applies for the `all` shape.
+  function recompose() {
+    var M = window.EventMerge;
+    var alerts = (groupData.alerts && groupData.alerts.events) || [];
+    var quakes = (groupData.quakes && groupData.quakes.events) || [];
+    var nature = (groupData.nature && groupData.nature.events) || [];
+    var merged = M.mergeEvents(alerts, quakes, GROUP_EQ_MERGE);
+    allEvents = M.mergeEvents(merged, nature);
+
+    populateKinds();
+    var counts = {};
+    GROUPS.forEach(function (g) {
+      var p = groupData[g];
+      if (p && p.sourceCounts) {
+        Object.keys(p.sourceCounts).forEach(function (s) {
+          counts[s] = (counts[s] || 0) + p.sourceCounts[s];
+        });
+      }
+    });
+    els.sourcesNote.textContent = Object.keys(counts).map(function (s) {
+      return (SOURCE_LABELS[s] || s) + ': ' + counts[s];
+    }).join(' · ') + ' — ' + I18n.t('merged', LANG);
+    render();
+  }
+
+  function finishCycle() {
+    setBtnState('ready');
+    els.updated.textContent = I18n.t('updated', LANG) + ' ' +
+      I18n.formatDateTime(new Date().toISOString(), LANG);
+    if (!allEvents.length) {
+      els.errorBox.classList.remove('hidden');
+      return;
+    }
+    els.errorBox.classList.add('hidden');
+    // Announce arrivals only after the baseline cycle, so the first load
+    // does not fire a thousand alerts.
+    if (knownIds) {
+      var newcomers = allEvents.filter(function (e) { return !knownIds.has(e.id); });
+      if (newcomers.length) announceNew(newcomers);
+    }
+    knownIds = new Set(allEvents.map(function (e) { return e.id; }));
+  }
 
   function load() {
-    els.errorBox.classList.add('hidden');
     lastLoadAt = Date.now();
-    fetch(API_URL)
-      .then(function (res) {
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        return res.json();
-      })
-      .then(function (data) {
-        allEvents = data.events || [];
-        // Announce arrivals only after the baseline load, so the first
-        // payload does not fire a thousand alerts.
-        if (knownIds) {
-          var newcomers = allEvents.filter(function (e) { return !knownIds.has(e.id); });
-          if (newcomers.length) announceNew(newcomers);
-        }
-        knownIds = new Set(allEvents.map(function (e) { return e.id; }));
-
-        populateKinds();
-        els.updated.textContent = I18n.t('updated', LANG) + ' ' +
-          I18n.formatDateTime(data.updatedAt, LANG) + (data.stale ? ' ' + I18n.t('cached', LANG) : '');
-        if (data.sourceCounts) {
-          els.sourcesNote.textContent = Object.keys(data.sourceCounts).map(function (s) {
-            return (SOURCE_LABELS[s] || s) + ': ' + data.sourceCounts[s];
-          }).join(' · ') + ' — ' + I18n.t('merged', LANG);
-        }
-        els.loading.classList.add('hidden');
-        render();
-      })
-      .catch(function () {
-        els.loading.classList.add('hidden');
-        if (!allEvents.length) els.errorBox.classList.remove('hidden');
-      });
+    setBtnState('loading');
+    pendingGroups = GROUPS.length;
+    GROUPS.forEach(function (g) {
+      fetch(API_URL + '?group=' + g)
+        .then(function (res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function (data) {
+          groupData[g] = data;
+          recompose();
+        })
+        .catch(function () {
+          // Keep the group's previous data; the cycle still completes.
+        })
+        .then(function () {
+          pendingGroups--;
+          if (!pendingGroups) finishCycle();
+        });
+    });
   }
 
   function scheduleRefresh() {
@@ -892,7 +944,6 @@
   els.refreshBtn.addEventListener('click', load);
   els.retryBtn.addEventListener('click', function () {
     els.errorBox.classList.add('hidden');
-    els.loading.classList.remove('hidden');
     load();
   });
   els.panelToggle.addEventListener('click', function () {

@@ -3,6 +3,7 @@
 // with plain Node (no Vercel CLI). Usage: `npm run dev` (PORT env optional).
 
 import http from 'node:http';
+import { gzipSync } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,7 +34,7 @@ const API_ROUTES = {
 };
 
 /** Minimal Vercel-style res shim on top of node:http ServerResponse. */
-function shimRes(res) {
+function shimRes(res, req) {
   res.status = (code) => {
     res.statusCode = code;
     return res;
@@ -42,7 +43,14 @@ function shimRes(res) {
     if (!res.getHeader('Content-Type')) {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
     }
-    res.end(JSON.stringify(obj));
+    const body = JSON.stringify(obj);
+    // Vercel gzips in production; mirror it locally so payload sizes match.
+    if (body.length > 1024 && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+      res.setHeader('Content-Encoding', 'gzip');
+      res.end(gzipSync(body));
+    } else {
+      res.end(body);
+    }
     return res;
   };
   res.send = (body) => {
@@ -59,7 +67,7 @@ const server = http.createServer(async (req, res) => {
   const apiHandler = API_ROUTES[pathname.replace(/\/$/, '')];
   if (apiHandler) {
     try {
-      await apiHandler(req, shimRes(res));
+      await apiHandler(req, shimRes(res, req));
     } catch (err) {
       res.statusCode = 500;
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
