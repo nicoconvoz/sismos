@@ -180,9 +180,11 @@ export function nearLabel(nearData, lang) {
  * Viewer-language event title, built from structured fields:
  * 1. earthquakes: "Kind: <distance label>";
  * 2. named phenomena (cyclones): "Kind NAME [in Country]";
- * 3. country known: "Kind in Country";
- * 4. near a city: "Kind near City, Country";
- * 5. otherwise the raw feed title.
+ * 3. state/province known: "Kind in Admin1, Country" — never as broad as
+ *    the whole country when the geocoder knows better;
+ * 4. country known: "Kind in Country";
+ * 5. near a city: "Kind near City, Country";
+ * 6. otherwise the raw feed title.
  */
 export function localizeTitle(event, lang) {
   const kind = kindName(event.kind, lang);
@@ -194,6 +196,11 @@ export function localizeTitle(event, lang) {
   if (event.eventName) {
     const country = countryName(event.cc, lang);
     return country ? `${kind} ${event.eventName} ${inWord} ${country}` : `${kind} ${event.eventName}`;
+  }
+  const admin1 = event.nearData && event.nearData.admin1;
+  if (admin1) {
+    const country = countryName((event.nearData && event.nearData.cc) || event.cc, lang);
+    return `${kind} ${inWord} ${admin1}${country ? `, ${country}` : ''}`;
   }
   if (event.cc) {
     return `${kind} ${inWord} ${countryName(event.cc, lang)}`;

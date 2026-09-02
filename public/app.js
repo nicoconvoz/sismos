@@ -608,13 +608,24 @@
     body.innerHTML = '<div class="news-empty">' + I18n.t('loading', LANG) + '</div>';
     modal.classList.remove('hidden');
 
+    // Point events (quakes) keep the strict cutoff: coverage from before
+    // them is about something else. Official WARNINGS re-issue daily (the
+    // SMN stamps a fresh sent-time every morning) and the press covers them
+    // from the day-ahead announcement — so their news window opens 24 h
+    // before the warning.
+    var sinceIso = e.time;
+    if (e.starts && e.ends) {
+      var announced = Math.min(Date.parse(e.time), Date.parse(e.starts)) - 24 * 3600 * 1000;
+      sinceIso = new Date(announced).toISOString();
+    }
+
     // News in the viewer's language; the server only picks the local zone
     // edition when its press speaks that same language.
     fetch('/api/news?kind=' + encodeURIComponent(e.kind) +
       '&place=' + encodeURIComponent(place) + '&admin1=' + encodeURIComponent(admin1) +
       '&cc=' + encodeURIComponent(cc) +
       '&lang=' + encodeURIComponent(LANG) +
-      '&since=' + encodeURIComponent(e.time) +
+      '&since=' + encodeURIComponent(sinceIso) +
       '&name=' + encodeURIComponent(e.eventName || ''))
       .then(function (res) {
         if (!res.ok) throw new Error('HTTP ' + res.status);

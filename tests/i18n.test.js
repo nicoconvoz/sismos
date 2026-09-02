@@ -106,7 +106,21 @@ test('localizeTitle names cyclones and adds the country when known', () => {
   assert.equal(localizeTitle(tcLand, 'es'), 'Ciclón KARINA-26 en México');
 });
 
-test('localizeTitle uses "kind in Country" when the feed provides a country code', () => {
+test('localizeTitle points at the STATE/PROVINCE when the geocoder knows it', () => {
+  // "Viento en Argentina" is uselessly broad when we know it is Mendoza.
+  const zonda = {
+    kind: 'wind',
+    title: 'Viento Zonda',
+    cc: 'AR',
+    nearData: { name: 'Villa Atuel', admin1: 'Mendoza', cc: 'AR', distKm: 8, dir: 3 }
+  };
+  assert.equal(localizeTitle(zonda, 'es'), 'Viento en Mendoza, Argentina');
+  assert.equal(localizeTitle(zonda, 'en'), 'Wind in Mendoza, Argentina');
+  const fire = { kind: 'wildfire', title: 'x', nearData: { name: 'Heppner', admin1: 'Oregon', cc: 'US', distKm: 20, dir: 3 } };
+  assert.equal(localizeTitle(fire, 'es'), 'Incendio en Oregon, Estados Unidos');
+});
+
+test('localizeTitle uses "kind in Country" only without finer location', () => {
   const flood = { kind: 'flood', title: 'Flood in Nepal', cc: 'NP' };
   assert.equal(localizeTitle(flood, 'es'), 'Inundación en Nepal');
   assert.equal(localizeTitle(flood, 'en'), 'Flood in Nepal');
@@ -114,9 +128,9 @@ test('localizeTitle uses "kind in Country" when the feed provides a country code
 });
 
 test('localizeTitle falls back to "kind near City" and then to the raw title', () => {
-  const fire = { kind: 'wildfire', title: 'Wildfire Ruggs, Morrow, Oregon', nearData: { name: 'Heppner', admin1: 'Oregon', cc: 'US', distKm: 20, dir: 3 } };
-  assert.equal(localizeTitle(fire, 'es'), 'Incendio cerca de Heppner, Oregon, Estados Unidos');
-  assert.equal(localizeTitle(fire, 'en'), 'Wildfire near Heppner, Oregon, United States');
+  // No admin1 from the geocoder -> the nearest city carries the location.
+  const fire = { kind: 'wildfire', title: 'x', nearData: { name: 'Heppner', admin1: null, cc: 'US', distKm: 20, dir: 3 } };
+  assert.equal(localizeTitle(fire, 'en'), 'Wildfire near Heppner, United States');
   // Nothing structured -> raw feed title survives.
   const berg = { kind: 'ice', title: 'Iceberg A23a' };
   assert.equal(localizeTitle(berg, 'en'), 'Iceberg A23a');
