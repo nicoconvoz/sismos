@@ -111,9 +111,11 @@
       .pointLng(function (d) { return d.lon; })
       .ringLat(function (d) { return d.lat; })
       .ringLng(function (d) { return d.lon; })
-      .pointAltitude(0.01)
+      // Flat circles on the surface (near-zero altitude), like the sismos
+      // globe — tall cylinders read wrong at grazing angles.
+      .pointAltitude(function () { return 0.0015 * zoomScale; })
       .pointColor(function (d) { return colorFor(d); })
-      .pointRadius(function (d) { return 0.14 + d.magnitude * 0.09; })
+      .pointRadius(pointRadius)
       .pointsMerge(false)
       // Touch devices fire hover + click on the same tap, so the hover
       // bubble and the card would open together; keep only the card there.
@@ -125,9 +127,25 @@
         var rgb = d.alert === 'red' ? '255,77,94' : hexToRgb(TIER_COLORS[d.tier] || '#9aa7bb');
         return function (t) { return 'rgba(' + rgb + ',' + (1 - t) + ')'; };
       })
-      .ringMaxRadius(function (d) { return d.alert === 'red' ? 4.5 : 1.5 + d.magnitude * 0.4; })
+      .ringMaxRadius(ringMaxRadius)
       .ringPropagationSpeed(1.3)
       .ringRepeatPeriod(1400);
+
+    // Re-size markers on zoom (ported from the sismos globe). onZoom also
+    // fires while rotating, so only rebuild when the altitude-derived scale
+    // actually changes (8% hysteresis), and debounce the rebuild.
+    var zoomTimer;
+    globe.onZoom(function (pov) {
+      var next = Math.min(1, Math.max(0.12, pov.altitude / 2.3));
+      if (Math.abs(next - zoomScale) / zoomScale < 0.08) return;
+      zoomScale = next;
+      clearTimeout(zoomTimer);
+      zoomTimer = setTimeout(function () {
+        globe.pointRadius(pointRadius);
+        globe.pointAltitude(function () { return 0.0015 * zoomScale; });
+        globe.ringMaxRadius(ringMaxRadius);
+      }, 150);
+    });
 
     globe.pointOfView({ lat: 10, lng: -30, altitude: 2.3 });
     globe.controls().autoRotate = true;
@@ -237,6 +255,20 @@
       .catch(function (err) {
         console.warn('Vector borders unavailable:', err);
       });
+  }
+
+  // Shrinks marker radii as the camera zooms in, so clustered events separate
+  // and each circle sits precisely on its coordinates: 1 at the default
+  // altitude (2.3), down to ~1/8 fully zoomed in. Zooming out grows them back.
+  var zoomScale = 1;
+
+  function pointRadius(e) {
+    // Generous minimum so small events remain visible on the whole globe.
+    return Math.max(0.32, 0.22 + 0.08 * e.magnitude) * zoomScale;
+  }
+
+  function ringMaxRadius(e) {
+    return (e.alert === 'red' ? 4.5 : 1.5 + e.magnitude * 0.4) * zoomScale;
   }
 
   function isTouch() {
